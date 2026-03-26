@@ -1,0 +1,124 @@
+-- [[ УЛЬТИМАТИВНЫЙ КИКЕР V4 (PRO) ]]
+
+local ScreenGui = Instance.new("ScreenGui")
+local MainFrame = Instance.new("Frame")
+local InputField = Instance.new("TextBox")
+local StartBtn = Instance.new("TextButton")
+local StopBtn = Instance.new("TextButton")
+local StatusLabel = Instance.new("TextLabel")
+
+-- Настройка GUI
+ScreenGui.Parent = game:GetService("CoreGui")
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.5, -110, 0.5, -60)
+MainFrame.Size = UDim2.new(0, 220, 0, 140)
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+InputField.Parent = MainFrame
+InputField.PlaceholderText = "Ник (например: prostoy9999)"
+InputField.Size = UDim2.new(0.9, 0, 0, 30)
+InputField.Position = UDim2.new(0.05, 0, 0.1, 0)
+InputField.Text = ""
+
+StatusLabel.Parent = MainFrame
+StatusLabel.Size = UDim2.new(1, 0, 0, 20)
+StatusLabel.Position = UDim2.new(0, 0, 0.35, 0)
+StatusLabel.Text = "Статус: Ожидание"
+StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+StatusLabel.BackgroundTransparency = 1
+
+StartBtn.Parent = MainFrame
+StartBtn.Text = "ЗАПУСК"
+StartBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 50)
+StartBtn.Position = UDim2.new(0.05, 0, 0.6, 0)
+StartBtn.Size = UDim2.new(0.43, 0, 0, 40)
+
+StopBtn.Parent = MainFrame
+StopBtn.Text = "СТОП"
+StopBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+StopBtn.Position = UDim2.new(0.52, 0, 0.6, 0)
+StopBtn.Size = UDim2.new(0.43, 0, 0, 40)
+
+-- ЛОГИКА РАБОТЫ
+local active = false
+local lastKickOpen = 0
+local kickCooldown = 1.0 -- Пауза между нажатиями на "Kick", чтобы не плодить окна
+
+local function fastClick(obj)
+    pcall(function()
+        -- Жмем всеми возможными способами сразу
+        if firesignal then
+            firesignal(obj.Activated)
+            firesignal(obj.MouseButton1Click)
+        else
+            -- Для простых исполнителей
+            obj:Click() 
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        if active then
+            local target = InputField.Text:lower()
+            if target == "" then 
+                StatusLabel.Text = "Ошибка: Введите ник!"
+                task.wait(0.5)
+            else
+                local targetFound = false
+                
+                -- ШАГ 1: Ищем цель по всему Explorer
+                for _, obj in ipairs(game:GetDescendants()) do
+                    if not active then break end
+                    
+                    if obj:IsA("TextButton") or obj:IsA("ImageButton") then
+                        -- Проверяем текст или имя на наличие ника
+                        local nameMatch = obj.Name:lower():find(target)
+                        local textMatch = false
+                        if obj:IsA("TextButton") then
+                            textMatch = obj.Text:lower():find(target)
+                        end
+                        
+                        if nameMatch or textMatch then
+                            fastClick(obj)
+                            StatusLabel.Text = "🎯 КЛИК ПО НИКУ!"
+                            targetFound = true
+                            task.wait(0.5) -- Пауза после успешного кика
+                            break
+                        end
+                    end
+                end
+                
+                -- ШАГ 2: Если ник не нашли, открываем меню кнопкой Kick
+                if not targetFound then
+                    if tick() - lastKickOpen > kickCooldown then
+                        for _, obj in ipairs(game:GetDescendants()) do
+                            if obj.Name == "Kick" and (obj:IsA("GuiButton")) then
+                                fastClick(obj)
+                                lastKickOpen = tick()
+                                StatusLabel.Text = "📂 Открываем меню..."
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            StatusLabel.Text = "Статус: Остановлен"
+        end
+        task.wait(0.1) -- Скорость работы цикла
+    end
+end)
+
+StartBtn.MouseButton1Click:Connect(function()
+    active = true
+    print("--- ЗАПУЩЕНО ---")
+end)
+
+StopBtn.MouseButton1Click:Connect(function()
+    active = false
+    print("--- ОСТАНОВЛЕНО ---")
+end)
