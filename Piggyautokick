@@ -155,7 +155,7 @@ local function buildGroqBody(userMsg)
     end
     table.insert(messages, {role = "user", content = userMsg})
     return HttpService:JSONEncode({
-        model = "meta-llama/llama-4-scout-17b-16e-instruct",
+        model = "openai/gpt-oss-120b",
         messages = messages,
         max_tokens = 200,
         temperature = 0.7
@@ -165,7 +165,7 @@ end
 local function callGemini(userMsg)
     local key = settings.geminiKey
     if key == "" then return nil, "no_key" end
-    local url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" .. key
+    local url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=" .. key
     local ok, res = pcall(function()
         return request({
             Url = url,
@@ -884,7 +884,7 @@ provInfo.TextSize = 9
 provInfo.Font = Enum.Font.Gotham
 provInfo.TextXAlignment = Enum.TextXAlignment.Left
 provInfo.TextWrapped = true
-provInfo.Text = "Gemini 2.0 Flash — основной провайдер\nGroq Llama 4 Scout — резервный (6000 токенов/мин)\nАвтопереключение при исчерпании лимитов.\nКлючи сохраняются на диск автоматически."
+provInfo.Text = "Gemini 3.1 Flash-Lite Preview — основной провайдер\nGroq GPT-OSS 120B — резервный (6000 токенов/мин)\nАвтопереключение при исчерпании лимитов.\nКлючи сохраняются на диск автоматически."
 
 tabPages[4] = settingsPage
 
