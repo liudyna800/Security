@@ -1,12 +1,42 @@
--- [[ SECURITY V5 — TABS EDITION ]]
--- Вкладки: Кикер | Blacklist | AI Chat
+-- [[ SECURITY V5 — AI EDITION ]]
+-- Вкладки: Кикер | Blacklist | AI Chat | Настройки
 
 local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
 
 -- =============================================
--- BLACKLIST: сохранение через файл
+-- НАСТРОЙКИ (сохраняются в файл)
 -- =============================================
+local SETTINGS_FILE = "security_settings.json"
 local BLACKLIST_FILE = "security_blacklist.json"
+
+local settings = {
+    geminiKey = "",
+    groqKey = "",
+}
+
+local function saveSettings()
+    pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(settings))
+    end)
+end
+
+local function loadSettings()
+    pcall(function()
+        if isfile(SETTINGS_FILE) then
+            local data = HttpService:JSONDecode(readfile(SETTINGS_FILE))
+            for k, v in pairs(data) do
+                settings[k] = v
+            end
+        end
+    end)
+end
+
+loadSettings()
+
+-- =============================================
+-- BLACKLIST
+-- =============================================
 local blacklist = {}
 
 local function saveBlacklist()
@@ -15,15 +45,14 @@ local function saveBlacklist()
         for name, _ in pairs(blacklist) do
             table.insert(data, name)
         end
-        writefile(BLACKLIST_FILE, game:GetService("HttpService"):JSONEncode(data))
+        writefile(BLACKLIST_FILE, HttpService:JSONEncode(data))
     end)
 end
 
 local function loadBlacklist()
     pcall(function()
         if isfile(BLACKLIST_FILE) then
-            local raw = readfile(BLACKLIST_FILE)
-            local data = game:GetService("HttpService"):JSONDecode(raw)
+            local data = HttpService:JSONDecode(readfile(BLACKLIST_FILE))
             for _, name in ipairs(data) do
                 blacklist[name:lower()] = true
             end
@@ -78,6 +107,216 @@ task.spawn(function()
 end)
 
 -- =============================================
+-- AI ДВИЖОК: Gemini + Groq fallback
+-- =============================================
+
+-- Состояние лимитов
+local geminiLimitUntil = 0   -- tick() до которого gemini на паузе
+local groqTokensUsed = 0     -- токены в текущей минуте
+local groqMinuteStart = tick()
+local GROQ_LIMIT = 6000      -- токенов в минуту
+
+local currentProvider = "gemini" -- "gemini" или "groq"
+local aiStatusLabel = nil  -- будет задан позже
+
+local function setAiStatus(txt, color)
+    if aiStatusLabel then
+        aiStatusLabel.Text = txt
+        aiStatusLabel.TextColor3 = color or Color3.fromRGB(120, 120, 150)
+    end
+end
+
+-- Системный промпт — краткие ответы
+local SYSTEM_PROMPT = [[Ты помощник в игре Roblox. Отвечай КОРОТКО — максимум 2-3 предложения. Без лишней воды. Будь дружелюбным и по делу.]]
+
+-- История диалога (для контекста)
+local chatHistory = {}
+
+local function buildGeminiBody(userMsg)
+    local contents = {}
+    for _, m in ipairs(chatHistory) do
+        table.insert(contents, {
+            role = m.role == "assistant" and "model" or "user",
+            parts = {{text = m.content}}
+        })
+    end
+    table.insert(contents, {role = "user", parts = {{text = userMsg}}})
+    return HttpService:JSONEncode({
+        system_instruction = {parts = {{text = SYSTEM_PROMPT}}},
+        contents = contents,
+        generationConfig = {maxOutputTokens = 200, temperature = 0.7}
+    })
+end
+
+local function buildGroqBody(userMsg)
+    local messages = {{role = "system", content = SYSTEM_PROMPT}}
+    for _, m in ipairs(chatHistory) do
+        table.insert(messages, {role = m.role, content = m.content})
+    end
+    table.insert(messages, {role = "user", content = userMsg})
+    return HttpService:JSONEncode({
+        model = "meta-llama/llama-4-scout-17b-16e-instruct",
+        messages = messages,
+        max_tokens = 200,
+        temperature = 0.7
+    })
+end
+
+local function callGemini(userMsg)
+    local key = settings.geminiKey
+    if key == "" then return nil, "no_key" end
+    local url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" .. key
+    local ok, res = pcall(function()
+        return request({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = buildGeminiBody(userMsg)
+        })
+    end)
+    if not ok then return nil, "error" end
+    if res.StatusCode == 429 then return nil, "rate_limit" end
+    if res.StatusCode ~= 200 then return nil, "error" end
+    local data = HttpService:JSONDecode(res.Body)
+    local text = data and data.candidates and data.candidates[1]
+        and data.candidates[1].content and data.candidates[1].content.parts
+        and data.candidates[1].content.parts[1] and data.candidates[1].content.parts[1].text
+    return text, nil
+end
+
+local function callGroq(userMsg)
+    local key = settings.groqKey
+    if key == "" then return nil, "no_key" end
+
+    -- Проверка лимита токенов в минуту
+    local now = tick()
+    if now - groqMinuteStart >= 60 then
+        groqTokensUsed = 0
+        groqMinuteStart = now
+    end
+
+    -- Ждём восстановления если лимит исчерпан
+    while groqTokensUsed >= GROQ_LIMIT do
+        local waitSec = 60 - (tick() - groqMinuteStart)
+        if waitSec <= 0 then
+            groqTokensUsed = 0
+            groqMinuteStart = tick()
+            break
+        end
+        setAiStatus("⏳ Groq лимит, жду " .. math.ceil(waitSec) .. "с...", Color3.fromRGB(255, 180, 0))
+        task.wait(2)
+        -- Проверяем вдруг Gemini восстановился
+        if tick() > geminiLimitUntil and currentProvider == "groq" then
+            setAiStatus("✅ Gemini восстановлен, переключаюсь...", Color3.fromRGB(0, 200, 100))
+            currentProvider = "gemini"
+            return nil, "switch_to_gemini"
+        end
+    end
+
+    local ok, res = pcall(function()
+        return request({
+            Url = "https://api.groq.com/openai/v1/chat/completions",
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["Authorization"] = "Bearer " .. key
+            },
+            Body = buildGroqBody(userMsg)
+        })
+    end)
+    if not ok then return nil, "error" end
+    if res.StatusCode == 429 then
+        -- Groq тоже лимит — ждём
+        groqTokensUsed = GROQ_LIMIT
+        return nil, "rate_limit"
+    end
+    if res.StatusCode ~= 200 then return nil, "error" end
+    local data = HttpService:JSONDecode(res.Body)
+    local text = data and data.choices and data.choices[1] and data.choices[1].message and data.choices[1].message.content
+    -- Считаем примерные токены (1 токен ~ 4 символа)
+    if text then
+        groqTokensUsed = groqTokensUsed + math.ceil(#text / 4) + math.ceil(#buildGroqBody(userMsg) / 4)
+    end
+    return text, nil
+end
+
+-- Главная функция запроса к ИИ с fallback логикой
+local aiWorking = false
+local function askAI(userMsg, onReply, onStatus)
+    if aiWorking then return end
+    aiWorking = true
+
+    task.spawn(function()
+        local reply = nil
+        local attempt = 0
+
+        while not reply and attempt < 10 do
+            attempt = attempt + 1
+
+            -- Проверяем восстановление Gemini
+            if currentProvider == "groq" and tick() > geminiLimitUntil then
+                currentProvider = "gemini"
+                onStatus("✅ Переключился на Gemini", Color3.fromRGB(0, 200, 100))
+                task.wait(0.5)
+            end
+
+            if currentProvider == "gemini" then
+                onStatus("💭 Думаю (Gemini)...", Color3.fromRGB(100, 180, 255))
+                local text, err = callGemini(userMsg)
+                if text then
+                    reply = text
+                elseif err == "rate_limit" then
+                    geminiLimitUntil = tick() + 65 -- пауза на ~1 минуту
+                    currentProvider = "groq"
+                    onStatus("⚠️ Gemini лимит → Groq", Color3.fromRGB(255, 180, 0))
+                    task.wait(0.5)
+                elseif err == "no_key" then
+                    onStatus("❌ Нет ключа Gemini!", Color3.fromRGB(255, 80, 80))
+                    -- Пробуем Groq
+                    currentProvider = "groq"
+                else
+                    onStatus("❌ Ошибка Gemini", Color3.fromRGB(255, 80, 80))
+                    task.wait(2)
+                end
+
+            elseif currentProvider == "groq" then
+                onStatus("💭 Думаю (Groq)...", Color3.fromRGB(180, 100, 255))
+                local text, err = callGroq(userMsg)
+                if text then
+                    reply = text
+                elseif err == "switch_to_gemini" then
+                    currentProvider = "gemini"
+                elseif err == "no_key" then
+                    onStatus("❌ Нет ключа Groq!", Color3.fromRGB(255, 80, 80))
+                    task.wait(3)
+                    break
+                elseif err == "rate_limit" then
+                    -- уже ждёт внутри callGroq
+                else
+                    onStatus("❌ Ошибка Groq", Color3.fromRGB(255, 80, 80))
+                    task.wait(2)
+                end
+            end
+        end
+
+        if reply then
+            -- Добавляем в историю
+            table.insert(chatHistory, {role = "user", content = userMsg})
+            table.insert(chatHistory, {role = "assistant", content = reply})
+            -- Ограничиваем историю 20 сообщениями
+            while #chatHistory > 20 do
+                table.remove(chatHistory, 1)
+            end
+            onReply(reply)
+        else
+            onReply("⚠️ Не удалось получить ответ. Проверь ключи в Настройках.")
+        end
+
+        aiWorking = false
+    end)
+end
+
+-- =============================================
 -- GUI
 -- =============================================
 local ScreenGui = Instance.new("ScreenGui")
@@ -88,8 +327,8 @@ local MainFrame = Instance.new("Frame")
 MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
 MainFrame.BorderSizePixel = 0
-MainFrame.Position = UDim2.new(0.5, -170, 0.5, -130)
-MainFrame.Size = UDim2.new(0, 340, 0, 260)
+MainFrame.Position = UDim2.new(0.5, -170, 0.5, -140)
+MainFrame.Size = UDim2.new(0, 340, 0, 280)
 MainFrame.Active = true
 MainFrame.Draggable = true
 
@@ -153,8 +392,8 @@ titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 
 local subTitle = Instance.new("TextLabel")
 subTitle.Parent = Header
-subTitle.Text = "Ultimate Kicker"
-subTitle.Size = UDim2.new(0, 130, 0, 14)
+subTitle.Text = "Ultimate Kicker + AI"
+subTitle.Size = UDim2.new(0, 150, 0, 14)
 subTitle.Position = UDim2.new(0, 40, 0, 23)
 subTitle.BackgroundTransparency = 1
 subTitle.TextColor3 = Color3.fromRGB(120, 120, 150)
@@ -168,7 +407,6 @@ statusDot.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
 statusDot.Size = UDim2.new(0, 8, 0, 8)
 statusDot.Position = UDim2.new(1, -45, 0.5, -4)
 statusDot.BorderSizePixel = 0
-
 local dotCorner = Instance.new("UICorner")
 dotCorner.CornerRadius = UDim.new(1, 0)
 dotCorner.Parent = statusDot
@@ -184,7 +422,7 @@ statusMini.TextSize = 10
 statusMini.Font = Enum.Font.GothamBold
 
 -- =============================================
--- TAB BAR
+-- TAB BAR (4 вкладки)
 -- =============================================
 local tabBar = Instance.new("Frame")
 tabBar.Parent = MainFrame
@@ -193,7 +431,7 @@ tabBar.Size = UDim2.new(1, 0, 0, 30)
 tabBar.Position = UDim2.new(0, 0, 0, 44)
 tabBar.BorderSizePixel = 0
 
-local tabNames = {"⚡ Кикер", "🚫 Blacklist", "🤖 AI Chat"}
+local tabNames = {"⚡ Кик", "🚫 Бан", "🤖 ИИ", "⚙️ Настр"}
 local tabButtons = {}
 local tabPages = {}
 
@@ -201,11 +439,11 @@ for i, name in ipairs(tabNames) do
     local btn = Instance.new("TextButton")
     btn.Parent = tabBar
     btn.Text = name
-    btn.Size = UDim2.new(0, 106, 1, 0)
-    btn.Position = UDim2.new(0, (i-1)*113 + 4, 0, 0)
+    btn.Size = UDim2.new(0, 80, 1, 0)
+    btn.Position = UDim2.new(0, (i-1)*84 + 4, 0, 0)
     btn.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
     btn.TextColor3 = Color3.fromRGB(130, 130, 160)
-    btn.TextSize = 11
+    btn.TextSize = 10
     btn.Font = Enum.Font.GothamBold
     btn.BorderSizePixel = 0
     local bc = Instance.new("UICorner")
@@ -230,7 +468,9 @@ local function makePage()
     return page
 end
 
--- === СТРАНИЦА 1: КИКЕР ===
+-- ============================================
+-- СТРАНИЦА 1: КИКЕР (логика не тронута)
+-- ============================================
 local kickPage = makePage()
 
 local InputField = Instance.new("TextBox")
@@ -302,7 +542,9 @@ local stc = Instance.new("UICorner"); stc.CornerRadius = UDim.new(0,8); stc.Pare
 
 tabPages[1] = kickPage
 
--- === СТРАНИЦА 2: BLACKLIST ===
+-- ============================================
+-- СТРАНИЦА 2: BLACKLIST
+-- ============================================
 local blPage = makePage()
 
 local blScroll = Instance.new("ScrollingFrame")
@@ -319,11 +561,15 @@ local blLayout = Instance.new("UIListLayout")
 blLayout.Parent = blScroll
 blLayout.Padding = UDim.new(0, 4)
 blLayout.SortOrder = Enum.SortOrder.LayoutOrder
+local blPad = Instance.new("UIPadding")
+blPad.Parent = blScroll
+blPad.PaddingLeft = UDim.new(0, 4)
+blPad.PaddingTop = UDim.new(0, 4)
 
 local blInputFrame = Instance.new("Frame")
 blInputFrame.Parent = blPage
 blInputFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-blInputFrame.Size = UDim2.new(0.65, 0, 0, 30)
+blInputFrame.Size = UDim2.new(0.63, 0, 0, 30)
 blInputFrame.Position = UDim2.new(0.05, 0, 0, 126)
 blInputFrame.BorderSizePixel = 0
 local blic = Instance.new("UICorner"); blic.CornerRadius = UDim.new(0,8); blic.Parent = blInputFrame
@@ -347,8 +593,8 @@ local blAddBtn = Instance.new("TextButton")
 blAddBtn.Parent = blPage
 blAddBtn.Text = "+ Добавить"
 blAddBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 220)
-blAddBtn.Size = UDim2.new(0.25, 0, 0, 30)
-blAddBtn.Position = UDim2.new(0.72, 0, 0, 126)
+blAddBtn.Size = UDim2.new(0.27, 0, 0, 30)
+blAddBtn.Position = UDim2.new(0.70, 0, 0, 126)
 blAddBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 blAddBtn.TextSize = 11
 blAddBtn.Font = Enum.Font.GothamBold
@@ -372,32 +618,34 @@ end)() .. " записей"
 
 tabPages[2] = blPage
 
+-- ФИКС кнопки удаления: используем ASCII "X" вместо символа
 local function addBlEntry(name)
     local row = Instance.new("Frame")
     row.Parent = blScroll
     row.BackgroundColor3 = Color3.fromRGB(25, 25, 40)
-    row.Size = UDim2.new(1, -6, 0, 26)
+    row.Size = UDim2.new(1, -8, 0, 26)
     row.BorderSizePixel = 0
     local rc = Instance.new("UICorner"); rc.CornerRadius = UDim.new(0,6); rc.Parent = row
 
     local lbl = Instance.new("TextLabel")
     lbl.Parent = row
-    lbl.Text = "🚫  " .. name
-    lbl.Size = UDim2.new(0.75, 0, 1, 0)
-    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.Text = "  " .. name
+    lbl.Size = UDim2.new(1, -36, 1, 0)
+    lbl.Position = UDim2.new(0, 4, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.TextColor3 = Color3.fromRGB(210, 90, 90)
     lbl.TextSize = 11
     lbl.Font = Enum.Font.Gotham
     lbl.TextXAlignment = Enum.TextXAlignment.Left
 
+    -- ФИКС: используем TextLabel "X" + фон вместо TextButton с эмодзи
     local delBtn = Instance.new("TextButton")
     delBtn.Parent = row
-    delBtn.Text = "✕"
-    delBtn.Size = UDim2.new(0, 22, 0, 22)
-    delBtn.Position = UDim2.new(1, -26, 0.5, -11)
-    delBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-    delBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    delBtn.Text = "X"
+    delBtn.Size = UDim2.new(0, 24, 0, 20)
+    delBtn.Position = UDim2.new(1, -28, 0.5, -10)
+    delBtn.BackgroundColor3 = Color3.fromRGB(160, 35, 35)
+    delBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     delBtn.TextSize = 11
     delBtn.Font = Enum.Font.GothamBold
     delBtn.BorderSizePixel = 0
@@ -407,6 +655,7 @@ local function addBlEntry(name)
         blacklist[name:lower()] = nil
         saveBlacklist()
         row:Destroy()
+        task.wait()
         blScroll.CanvasSize = UDim2.new(0, 0, 0, blLayout.AbsoluteContentSize.Y + 8)
         blStatus.Text = "Удалено: " .. name
     end)
@@ -420,79 +669,93 @@ end
 
 blAddBtn.MouseButton1Click:Connect(function()
     local name = blInput.Text:gsub("%s", "")
-    if name == "" then
-        blStatus.Text = "⚠️ Введите ник!"
-        return
-    end
-    if blacklist[name:lower()] then
-        blStatus.Text = "⚠️ Уже в списке!"
-        return
-    end
+    if name == "" then blStatus.Text = "⚠ Введите ник!"; return end
+    if blacklist[name:lower()] then blStatus.Text = "⚠ Уже в списке!"; return end
     blacklist[name:lower()] = true
     saveBlacklist()
     addBlEntry(name)
-    blStatus.Text = "✅ Добавлен: " .. name
+    blStatus.Text = "OK: " .. name .. " добавлен"
     blInput.Text = ""
 end)
 
--- === СТРАНИЦА 3: AI CHAT (заглушка) ===
+-- ============================================
+-- СТРАНИЦА 3: AI CHAT
+-- ============================================
 local aiPage = makePage()
 
-local aiHeader = Instance.new("TextLabel")
-aiHeader.Parent = aiPage
-aiHeader.Text = "🤖  AI Assistant"
-aiHeader.Size = UDim2.new(0.9, 0, 0, 20)
-aiHeader.Position = UDim2.new(0.05, 0, 0, 6)
-aiHeader.BackgroundTransparency = 1
-aiHeader.TextColor3 = Color3.fromRGB(180, 180, 220)
-aiHeader.TextSize = 13
-aiHeader.Font = Enum.Font.GothamBold
-aiHeader.TextXAlignment = Enum.TextXAlignment.Left
+-- Статус провайдера вверху
+local aiProviderLabel = Instance.new("TextLabel")
+aiProviderLabel.Parent = aiPage
+aiProviderLabel.Size = UDim2.new(0.9, 0, 0, 16)
+aiProviderLabel.Position = UDim2.new(0.05, 0, 0, 4)
+aiProviderLabel.BackgroundTransparency = 1
+aiProviderLabel.TextColor3 = Color3.fromRGB(0, 200, 100)
+aiProviderLabel.TextSize = 10
+aiProviderLabel.Font = Enum.Font.GothamBold
+aiProviderLabel.TextXAlignment = Enum.TextXAlignment.Left
+aiProviderLabel.Text = "Провайдер: Gemini (основной)"
 
+-- Привязываем aiStatusLabel
+aiStatusLabel = aiProviderLabel
+
+-- Чат скролл
 local aiChatBox = Instance.new("ScrollingFrame")
 aiChatBox.Parent = aiPage
 aiChatBox.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-aiChatBox.Size = UDim2.new(0.9, 0, 0, 90)
-aiChatBox.Position = UDim2.new(0.05, 0, 0, 30)
+aiChatBox.Size = UDim2.new(0.9, 0, 0, 140)
+aiChatBox.Position = UDim2.new(0.05, 0, 0, 22)
 aiChatBox.BorderSizePixel = 0
 aiChatBox.ScrollBarThickness = 3
 aiChatBox.ScrollBarImageColor3 = Color3.fromRGB(150, 0, 255)
 aiChatBox.CanvasSize = UDim2.new(0, 0, 0, 0)
+aiChatBox.ScrollingDirection = Enum.ScrollingDirection.Y
+aiChatBox.AutomaticCanvasSize = Enum.AutomaticSize.Y
 local aicc = Instance.new("UICorner"); aicc.CornerRadius = UDim.new(0,8); aicc.Parent = aiChatBox
+
 local aiLayout = Instance.new("UIListLayout")
 aiLayout.Parent = aiChatBox
 aiLayout.Padding = UDim.new(0, 4)
 aiLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
+local aiPad = Instance.new("UIPadding")
+aiPad.Parent = aiChatBox
+aiPad.PaddingLeft = UDim.new(0, 6)
+aiPad.PaddingRight = UDim.new(0, 6)
+aiPad.PaddingTop = UDim.new(0, 4)
+aiPad.PaddingBottom = UDim.new(0, 4)
+
+local function scrollToBottom()
+    task.wait()
+    aiChatBox.CanvasPosition = Vector2.new(0, math.huge)
+end
+
 local function addChatMsg(text, isAi)
-    local row = Instance.new("Frame")
-    row.Parent = aiChatBox
-    row.BackgroundTransparency = 1
-    row.Size = UDim2.new(1, -8, 0, 22)
-    row.BorderSizePixel = 0
+    local prefix = isAi and "[ИИ] " or "[Ты] "
+    local color = isAi and Color3.fromRGB(140, 100, 255) or Color3.fromRGB(200, 200, 220)
 
     local lbl = Instance.new("TextLabel")
-    lbl.Parent = row
-    lbl.Text = (isAi and "🤖 " or "👤 ") .. text
-    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.Parent = aiChatBox
+    lbl.Text = prefix .. text
+    lbl.Size = UDim2.new(1, 0, 0, 0)
+    lbl.AutomaticSize = Enum.AutomaticSize.Y
     lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = isAi and Color3.fromRGB(150, 100, 255) or Color3.fromRGB(200, 200, 220)
+    lbl.TextColor3 = color
     lbl.TextSize = 11
     lbl.Font = Enum.Font.Gotham
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextWrapped = true
 
-    aiChatBox.CanvasSize = UDim2.new(0, 0, 0, aiLayout.AbsoluteContentSize.Y + 8)
-    aiChatBox.CanvasPosition = Vector2.new(0, aiLayout.AbsoluteContentSize.Y)
+    scrollToBottom()
 end
 
-addChatMsg("Привет! AI-модуль скоро будет подключён.", true)
+addChatMsg("Привет! Настрой ключи во вкладке Настройки и напиши что-нибудь.", true)
 
+-- Ввод
 local aiInputFrame = Instance.new("Frame")
 aiInputFrame.Parent = aiPage
 aiInputFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-aiInputFrame.Size = UDim2.new(0.72, 0, 0, 28)
-aiInputFrame.Position = UDim2.new(0.05, 0, 0, 128)
+aiInputFrame.Size = UDim2.new(0.68, 0, 0, 28)
+aiInputFrame.Position = UDim2.new(0.05, 0, 1, -34)
 aiInputFrame.BorderSizePixel = 0
 local aiic = Instance.new("UICorner"); aiic.CornerRadius = UDim.new(0,8); aiic.Parent = aiInputFrame
 local aiis = Instance.new("UIStroke"); aiis.Color = Color3.fromRGB(80,40,120); aiis.Thickness = 1; aiis.Parent = aiInputFrame
@@ -513,26 +776,117 @@ aiInput.ClearTextOnFocus = false
 
 local aiSendBtn = Instance.new("TextButton")
 aiSendBtn.Parent = aiPage
-aiSendBtn.Text = "▶ Отправить"
+aiSendBtn.Text = "Отправить"
 aiSendBtn.BackgroundColor3 = Color3.fromRGB(100, 40, 200)
-aiSendBtn.Size = UDim2.new(0.2, 0, 0, 28)
-aiSendBtn.Position = UDim2.new(0.78, 0, 0, 128)
+aiSendBtn.Size = UDim2.new(0.22, 0, 0, 28)
+aiSendBtn.Position = UDim2.new(0.75, 0, 1, -34)
 aiSendBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 aiSendBtn.TextSize = 10
 aiSendBtn.Font = Enum.Font.GothamBold
 aiSendBtn.BorderSizePixel = 0
 local aisbc = Instance.new("UICorner"); aisbc.CornerRadius = UDim.new(0,8); aisbc.Parent = aiSendBtn
 
-aiSendBtn.MouseButton1Click:Connect(function()
-    local msg = aiInput.Text:gsub("%s+$", ""):gsub("^%s+", "")
+local function sendMessage()
+    if aiWorking then return end
+    local msg = aiInput.Text:match("^%s*(.-)%s*$")
     if msg == "" then return end
     addChatMsg(msg, false)
     aiInput.Text = ""
-    task.wait(0.5)
-    addChatMsg("AI-модуль ещё не подключён. Скоро!", true)
-end)
+
+    askAI(msg,
+        function(reply)
+            -- Обновляем провайдер лейбл
+            if currentProvider == "gemini" then
+                aiProviderLabel.Text = "Провайдер: Gemini (основной)"
+                aiProviderLabel.TextColor3 = Color3.fromRGB(0, 200, 100)
+            else
+                aiProviderLabel.Text = "Провайдер: Groq (резервный)"
+                aiProviderLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+            end
+            addChatMsg(reply, true)
+        end,
+        function(statusText, color)
+            aiProviderLabel.Text = statusText
+            aiProviderLabel.TextColor3 = color or Color3.fromRGB(255, 180, 0)
+        end
+    )
+end
+
+aiSendBtn.MouseButton1Click:Connect(sendMessage)
 
 tabPages[3] = aiPage
+
+-- ============================================
+-- СТРАНИЦА 4: НАСТРОЙКИ
+-- ============================================
+local settingsPage = makePage()
+
+local function makeKeyField(parent, labelText, yPos, currentVal, onSave)
+    local lbl = Instance.new("TextLabel")
+    lbl.Parent = parent
+    lbl.Text = labelText
+    lbl.Size = UDim2.new(0.9, 0, 0, 14)
+    lbl.Position = UDim2.new(0.05, 0, 0, yPos)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.fromRGB(160, 160, 200)
+    lbl.TextSize = 10
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local frame = Instance.new("Frame")
+    frame.Parent = parent
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 42)
+    frame.Size = UDim2.new(0.9, 0, 0, 28)
+    frame.Position = UDim2.new(0.05, 0, 0, yPos + 16)
+    frame.BorderSizePixel = 0
+    local fc = Instance.new("UICorner"); fc.CornerRadius = UDim.new(0,7); fc.Parent = frame
+    local fs = Instance.new("UIStroke"); fs.Color = Color3.fromRGB(60,60,100); fs.Thickness = 1; fs.Parent = frame
+
+    local tb = Instance.new("TextBox")
+    tb.Parent = frame
+    tb.Text = currentVal
+    tb.PlaceholderText = "Вставь ключ API..."
+    tb.PlaceholderColor3 = Color3.fromRGB(90, 90, 120)
+    tb.Size = UDim2.new(1, -10, 1, 0)
+    tb.Position = UDim2.new(0, 8, 0, 0)
+    tb.BackgroundTransparency = 1
+    tb.TextColor3 = Color3.fromRGB(200, 200, 230)
+    tb.TextSize = 10
+    tb.Font = Enum.Font.Gotham
+    tb.TextXAlignment = Enum.TextXAlignment.Left
+    tb.ClearTextOnFocus = false
+
+    tb.FocusLost:Connect(function()
+        onSave(tb.Text)
+    end)
+
+    return tb
+end
+
+makeKeyField(settingsPage, "Gemini API Key (основной)", 6, settings.geminiKey, function(v)
+    settings.geminiKey = v
+    saveSettings()
+end)
+
+makeKeyField(settingsPage, "Groq API Key (резервный)", 58, settings.groqKey, function(v)
+    settings.groqKey = v
+    saveSettings()
+end)
+
+-- Инфо о провайдерах
+local provInfo = Instance.new("TextLabel")
+provInfo.Parent = settingsPage
+provInfo.Size = UDim2.new(0.9, 0, 0, 60)
+provInfo.Position = UDim2.new(0.05, 0, 0, 112)
+provInfo.BackgroundTransparency = 1
+provInfo.TextColor3 = Color3.fromRGB(90, 90, 120)
+provInfo.TextSize = 9
+provInfo.Font = Enum.Font.Gotham
+provInfo.TextXAlignment = Enum.TextXAlignment.Left
+provInfo.TextWrapped = true
+provInfo.Text = "Gemini 2.0 Flash — основной провайдер\nGroq Llama 4 Scout — резервный (6000 токенов/мин)\nАвтопереключение при исчерпании лимитов.\nКлючи сохраняются на диск автоматически."
+
+tabPages[4] = settingsPage
 
 -- =============================================
 -- TAB SWITCHING
@@ -560,7 +914,7 @@ end
 switchTab(1)
 
 -- =============================================
--- HOVER ЭФФЕКТЫ
+-- HOVER
 -- =============================================
 local function addHover(btn)
     local origColor = btn.BackgroundColor3
@@ -583,7 +937,6 @@ addHover(StopBtn)
 addHover(blAddBtn)
 addHover(aiSendBtn)
 
--- Анимация появления
 MainFrame.BackgroundTransparency = 1
 task.defer(function()
     TweenService:Create(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back), {
@@ -629,7 +982,7 @@ task.spawn(function()
                         end
                         if nameMatch or textMatch then
                             fastClick(obj)
-                            StatusLabel.Text = "🎯 КЛИК ПО НИКУ!"
+                            StatusLabel.Text = "КЛИК ПО НИКУ!"
                             targetFound = true
                             task.wait(0.5)
                             break
@@ -643,7 +996,7 @@ task.spawn(function()
                             if obj.Name == "Kick" and obj:IsA("GuiButton") then
                                 fastClick(obj)
                                 lastKickOpen = tick()
-                                StatusLabel.Text = "📂 Открываем меню..."
+                                StatusLabel.Text = "Открываем меню..."
                                 break
                             end
                         end
