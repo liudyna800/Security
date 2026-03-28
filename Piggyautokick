@@ -133,15 +133,16 @@ end)
 local WALK_MAX = 15.5        -- буфер: 15.5 и ниже норма (ходьба=15, флуктуации до 15.5 ок)
 local SPRINT_MAX = 21.5      -- буфер: выше 21.5 = сразу чит (21 это норм бег)
 local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
+local FLY_CHEAT_TIME = 3      -- секунд в воздухе без Freefall/Jump = флай
 
 -- Состояния слежки за каждым игроком
 local playerWatch = {}
 -- playerWatch[userId] = {
---   sprintStart = tick() или nil,
---   lastPos = Vector3,
---   lastTick = tick(),
---   flagged = false,
---   flagCount = 0,
+--   sprintStart   = tick() или nil,  -- таймер спринта
+--   airStart      = tick() или nil,  -- таймер нахождения в воздухе (флай)
+--   flagged       = false,
+--   flaggedFly    = false,
+--   flagCount     = 0,
 -- }
 
 local addChatMsgGlobal = nil  -- будет задан после GUI
@@ -174,7 +175,7 @@ task.spawn(function()
 
             local uid = player.UserId
             if not playerWatch[uid] then
-                playerWatch[uid] = {sprintStart = nil, flagged = false, flagCount = 0}
+                playerWatch[uid] = {sprintStart = nil, airStart = nil, flagged = false, flaggedFly = false, flagCount = 0}
             end
 
             local pw = playerWatch[uid]
@@ -183,27 +184,82 @@ task.spawn(function()
             local speed = getHorizontalSpeed(player)
             local state = getHumanoidState(player)
 
-            -- Игнорируем состояния падения / прыжка
-            local isFalling = state == Enum.HumanoidStateType.Freefall
-                or state == Enum.HumanoidStateType.Jumping
-                or state == Enum.HumanoidStateType.Flying
+            -- Определяем состояния
+            local isJumping = state == Enum.HumanoidStateType.Jumping
+            local isFreefall = state == Enum.HumanoidStateType.Freefall
+            local isNormalAir = isJumping or isFreefall  -- обычный прыжок/падение
 
-            if isFalling then
+            -- === ФЛАЙ ДЕТЕКТ ===
+            -- Вариант 1: FloorMaterial == Air + не Freefall/Jump + Y vel ~0 (завис)
+            -- Вариант 2: Y позиция не меняется >0.5 юнитов за 3 сек пока в воздухе
+            if not pw.flaggedFly then
+                local char_ = player.Character
+                local hrp_ = char_ and char_:FindFirstChild("HumanoidRootPart")
+                local hum_ = char_ and char_:FindFirstChildOfClass("Humanoid")
+                if hrp_ and hum_ then
+                    local yVel = hrp_.Velocity.Y
+                    local yPos = hrp_.Position.Y
+                    local floorMat = hum_.FloorMaterial
+                    local onGround = floorMat ~= Enum.Material.Air
+
+                    -- Вариант 1: завис в воздухе (Y vel ~0, не на земле, не прыжок/падение)
+                    local suspectV1 = not onGround and not isNormalAir and math.abs(yVel) < 1.5
+
+                    -- Вариант 2: Y позиция не меняется >0.5 за интервал пока не на земле и не падает
+                    local suspectV2 = false
+                    if not onGround and not isNormalAir then
+                        if pw.flyLastY == nil then
+                            pw.flyLastY = yPos
+                            pw.flyLastYTick = tick()
+                        else
+                            local dy = math.abs(yPos - pw.flyLastY)
+                            local dt = tick() - pw.flyLastYTick
+                            if dt >= 1.0 then  -- проверяем раз в секунду
+                                suspectV2 = dy < 0.5  -- почти не двигается по Y
+                                pw.flyLastY = yPos
+                                pw.flyLastYTick = tick()
+                            end
+                        end
+                    else
+                        pw.flyLastY = nil
+                        pw.flyLastYTick = nil
+                    end
+
+                    local isSuspectFly = suspectV1 or suspectV2
+
+                    if isSuspectFly then
+                        if pw.airStart == nil then
+                            pw.airStart = tick()
+                        elseif tick() - pw.airStart >= FLY_CHEAT_TIME then
+                            pw.flaggedFly = true
+                            if onCheatDetected then
+                                onCheatDetected(player, speed, "FLY")
+                            end
+                        end
+                    else
+                        pw.airStart = nil
+                    end
+                end
+            end
+
+            -- Для спид-чека игнорируем воздух
+            if isNormalAir then
                 pw.sprintStart = nil
                 continue
             end
 
-            -- Сразу чит если скорость > 21
-            if speed > SPRINT_MAX then  -- строго больше 21.5
+            -- === СКОРОСТЬ ДЕТЕКТ ===
+            -- Сразу чит если скорость > 21.5
+            if speed > SPRINT_MAX then
                 pw.flagCount = pw.flagCount + 1
-                if pw.flagCount >= 3 then -- 3 замера подряд чтобы не ложное
+                if pw.flagCount >= 3 then
                     pw.flagged = true
                     if onCheatDetected then
                         onCheatDetected(player, speed, "SPEED_OVER_MAX")
                     end
                 end
-            -- Подозрительная зона 15-21: считаем время
-            elseif speed > WALK_MAX then  -- строго больше 15 (т.е. от 16 и выше)
+            -- Подозрительная зона 15.5-21.5: считаем время
+            elseif speed > WALK_MAX then
                 pw.flagCount = 0
                 if pw.sprintStart == nil then
                     pw.sprintStart = tick()
@@ -217,7 +273,6 @@ task.spawn(function()
                     end
                 end
             else
-                -- Норма — сбрасываем таймер спринта
                 pw.sprintStart = nil
                 pw.flagCount = 0
             end
@@ -272,9 +327,12 @@ task.spawn(function()
                 local pw = playerWatch[p.UserId]
                 local st = "норма"
                 if pw then
-                    if pw.flagged then st = "ЗАДЕТЕКТЕН"
+                    if pw.flaggedFly then st = "ЗАДЕТЕКТЕН(флай)"
+                    elseif pw.flagged then st = "ЗАДЕТЕКТЕН(спид)"
                     elseif pw.sprintStart then
-                        st = "подозрение " .. math.floor(tick() - pw.sprintStart) .. "с"
+                        st = "подозрение_спид " .. math.floor(tick() - pw.sprintStart) .. "с"
+                    elseif pw.airStart then
+                        st = "подозрение_флай " .. math.floor(tick() - pw.airStart) .. "с"
                     end
                 end
                 table.insert(snap, p.Name .. " (скорость=" .. spd .. ", статус=" .. st .. ")")
@@ -286,8 +344,9 @@ end)
 
 local function buildSystemPrompt()
     local memBlock = buildMemoryBlock()
+    -- Снапшот также в системном промпте для контекста
     local playersBlock = #playersSnapshot > 0
-        and ("\n\nИгроки онлайн:\n" .. table.concat(playersSnapshot, "\n"))
+        and ("\n\nИгроки онлайн (обновляется каждые 2 сек):\n" .. table.concat(playersSnapshot, "\n"))
         or "\n\nИгроков онлайн нет."
 
     local prompt = [[Ты AI-ассистент для игры Piggy Build Mode в Roblox. Помогаешь модератору.
@@ -844,13 +903,20 @@ aiSendBtn.Position = UDim2.new(0.75, 0, 1, -34); aiSendBtn.TextColor3 = Color3.f
 aiSendBtn.TextSize = 10; aiSendBtn.Font = Enum.Font.GothamBold; aiSendBtn.BorderSizePixel = 0
 local aisbc = Instance.new("UICorner"); aisbc.CornerRadius = UDim.new(0,8); aisbc.Parent = aiSendBtn
 
+local function getPlayersContext()
+    if #playersSnapshot == 0 then return "" end
+    return "\n[Игроки онлайн: " .. table.concat(playersSnapshot, " | ") .. "]"
+end
+
 local function sendMessage()
     if aiWorking then return end
     local msg = aiInput.Text:match("^%s*(.-)%s*$")
     if msg == "" then return end
     addChatMsg(msg, false)
     aiInput.Text = ""
-    askAI(msg,
+    -- Прикрепляем актуальный список игроков прямо к запросу
+    local msgWithContext = msg .. getPlayersContext()
+    askAI(msgWithContext,
         function(reply)
             if currentProvider == "gemini" then
                 aiProviderLabel.Text = "Провайдер: Gemini (основной)"
@@ -989,21 +1055,27 @@ end)
 onCheatDetected = function(player, speed, reason)
     local speedRounded = math.floor(speed * 10) / 10
     local reasonText = ""
+    local cheatType = ""
     if reason == "SPEED_OVER_MAX" then
-        reasonText = "скорость " .. speedRounded .. " (выше максимума 21)"
+        reasonText = "скорость " .. speedRounded .. " (выше максимума 21.5)"
+        cheatType = "СПИДХАК"
     elseif reason == "SPEED_SUSTAINED" then
         reasonText = "скорость " .. speedRounded .. " держится более 5 секунд"
+        cheatType = "СПИДХАК"
+    elseif reason == "FLY" then
+        reasonText = "летает (в воздухе более 3 сек без прыжка/падения)"
+        cheatType = "ФЛАЙ"
     end
 
     -- Алерт в чат (системный, без ИИ) с кнопкой кика
-    addChatMsgGlobal("Детект: " .. player.Name .. " | скорость " .. speedRounded, false, true, player.Name)
+    addChatMsgGlobal("Детект [" .. cheatType .. "]: " .. player.Name .. (reason == "FLY" and "" or " | скорость " .. speedRounded), false, true, player.Name)
 
     -- Запоминаем событие
     local memFact = os.date("%H:%M") .. " — " .. player.Name .. " пойман (" .. reasonText .. ")"
     addMemory(memFact)
 
     -- Отправляем запрос к ИИ через очередь античита
-    local prompt = "Сообщи о читере: игрок " .. player.Name .. ", " .. reasonText .. ". Используй формат player (@никнейм)."
+    local prompt = "Сообщи о читере (" .. cheatType .. "): игрок " .. player.Name .. ", " .. reasonText .. ". Используй формат player (@никнейм)."
     askAIAnticheat(prompt,
         function(reply)
             aiProviderLabel.Text = currentProvider == "gemini" and "Провайдер: Gemini" or "Провайдер: Groq"
