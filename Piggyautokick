@@ -1050,37 +1050,43 @@ task.defer(function()
 end)
 
 -- =============================================
--- CALLBACK античита: ИИ получает репорт и пишет в чат
+-- CALLBACK античита: буферизация → одно сообщение на игрока
 -- =============================================
-onCheatDetected = function(player, speed, reason)
-    local speedRounded = math.floor(speed * 10) / 10
-    local reasonText = ""
-    local cheatType = ""
-    if reason == "SPEED_OVER_MAX" then
-        reasonText = "скорость " .. speedRounded .. " (выше максимума 21.5)"
-        cheatType = "СПИДХАК"
-    elseif reason == "SPEED_SUSTAINED" then
-        reasonText = "скорость " .. speedRounded .. " держится более 5 секунд"
-        cheatType = "СПИДХАК"
-    elseif reason == "FLY" then
-        reasonText = "летает (в воздухе более 3 сек без прыжка/падения)"
-        cheatType = "ФЛАЙ"
+local detectBuffer = {}  -- detectBuffer[userId] = {cheats = {}, timer = nil}
+
+local function flushDetect(player)
+    local uid = player.UserId
+    local buf = detectBuffer[uid]
+    if not buf or #buf.cheats == 0 then return end
+
+    -- Собираем все типы читов в одну строку
+    local cheatTypes = {}
+    local details = {}
+    local speedVal = nil
+    for _, c in ipairs(buf.cheats) do
+        table.insert(cheatTypes, c.cheatType)
+        table.insert(details, c.reasonText)
+        if c.speed then speedVal = c.speed end
     end
+    local typesStr = table.concat(cheatTypes, " + ")
+    local detailsStr = table.concat(details, "; ")
 
-    -- Алерт в чат (системный, без ИИ) с кнопкой кика
-    addChatMsgGlobal("Детект [" .. cheatType .. "]: " .. player.Name .. (reason == "FLY" and "" or " | скорость " .. speedRounded), false, true, player.Name)
+    -- Системный алерт — один
+    local alertText = "Детект [" .. typesStr .. "]: " .. player.Name
+    if speedVal then alertText = alertText .. " | скорость " .. speedVal end
+    addChatMsgGlobal(alertText, false, true, player.Name)
 
-    -- Запоминаем событие
-    local memFact = os.date("%H:%M") .. " — " .. player.Name .. " пойман (" .. reasonText .. ")"
+    -- Память
+    local memFact = os.date("%H:%M") .. " — " .. player.Name .. " пойман (" .. detailsStr .. ")"
     addMemory(memFact)
 
-    -- Отправляем запрос к ИИ через очередь античита
-    local prompt = "Сообщи о читере (" .. cheatType .. "): игрок " .. player.Name .. ", " .. reasonText .. ". Используй формат player (@никнейм)."
+    -- Один запрос к ИИ с полным описанием
+    local prompt = "Сообщи о читере: игрок " .. player.Name .. ", нарушения: " .. detailsStr
+        .. ". ФОРМАТ ОТВЕТА СТРОГО: player (@" .. player.Name .. ") [тип чита] — краткая причина. Пример: player (@TestUser) [СПИДХАК] — скорость 45, выше лимита 21.5."
     askAIAnticheat(prompt,
         function(reply)
             aiProviderLabel.Text = currentProvider == "gemini" and "Провайдер: Gemini" or "Провайдер: Groq"
             addChatMsgGlobal(reply, true)
-            -- Обновляем кнопку памяти
             clearMemBtn.Text = "Очистить память ИИ (" .. #aiMemory .. " фактов)"
         end,
         function(statusText, color)
@@ -1089,7 +1095,52 @@ onCheatDetected = function(player, speed, reason)
         end
     )
 
+    detectBuffer[uid] = nil
 end
+
+onCheatDetected = function(player, speed, reason)
+    local speedRounded = speed > 0 and math.floor(speed * 10) / 10 or nil
+    local reasonText = ""
+    local cheatType = ""
+    if reason == "SPEED_OVER_MAX" then
+        reasonText = "скорость " .. speedRounded .. " (выше максимума 21.5)"
+        cheatType = "СПИДХАК"
+    elseif reason == "SPEED_SUSTAINED" then
+        reasonText = "скорость " .. speedRounded .. " держится более 5 сек"
+        cheatType = "СПИДХАК"
+    elseif reason == "FLY" then
+        reasonText = "флай (в воздухе более 3 сек без прыжка/падения)"
+        cheatType = "ФЛАЙ"
+        speedRounded = nil
+    end
+
+    local uid = player.UserId
+    if not detectBuffer[uid] then
+        detectBuffer[uid] = {cheats = {}}
+    end
+    -- Добавляем в буфер только уникальный тип
+    local alreadyHas = false
+    for _, c in ipairs(detectBuffer[uid].cheats) do
+        if c.cheatType == cheatType then alreadyHas = true; break end
+    end
+    if not alreadyHas then
+        table.insert(detectBuffer[uid].cheats, {
+            cheatType = cheatType,
+            reasonText = reasonText,
+            speed = speedRounded
+        })
+    end
+
+    -- Сбрасываем таймер — ждём 1 сек чтобы собрать все детекты на игрока
+    if detectBuffer[uid].thread then
+        task.cancel(detectBuffer[uid].thread)
+    end
+    detectBuffer[uid].thread = task.delay(1, function()
+        flushDetect(player)
+    end)
+end
+
+
 
 -- =============================================
 -- ОРИГИНАЛЬНАЯ ЛОГИКА КИКА (НЕ ТРОНУТА)
