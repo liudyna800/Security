@@ -179,7 +179,7 @@ task.spawn(function()
             end
 
             local pw = playerWatch[uid]
-            if pw.flagged then continue end -- уже задетектили, не спамим
+            if pw.flagged and pw.flaggedFly then continue end
 
             local speed = getHorizontalSpeed(player)
             local state = getHumanoidState(player)
@@ -202,8 +202,9 @@ task.spawn(function()
                     local floorMat = hum_.FloorMaterial
                     local onGround = floorMat ~= Enum.Material.Air
 
-                    -- Вариант 1: завис в воздухе (Y vel ~0, не на земле, не прыжок/падение)
-                    local suspectV1 = not onGround and not isNormalAir and math.abs(yVel) < 1.5
+                    -- Вариант 1: завис в воздухе (Y vel небольшой, не на земле, не прыжок/падение)
+                    -- порог 4 — при обычном падении yVel намного больше (>10)
+                    local suspectV1 = not onGround and not isNormalAir and math.abs(yVel) < 4
 
                     -- Вариант 2: Y позиция не меняется >0.5 за интервал пока не на земле и не падает
                     local suspectV2 = false
@@ -215,7 +216,7 @@ task.spawn(function()
                             local dy = math.abs(yPos - pw.flyLastY)
                             local dt = tick() - pw.flyLastYTick
                             if dt >= 1.0 then  -- проверяем раз в секунду
-                                suspectV2 = dy < 0.5  -- почти не двигается по Y
+                                suspectV2 = dy < 1.5  -- при флае Y почти не меняется, при падении >10
                                 pw.flyLastY = yPos
                                 pw.flyLastYTick = tick()
                             end
@@ -249,6 +250,7 @@ task.spawn(function()
             end
 
             -- === СКОРОСТЬ ДЕТЕКТ ===
+            if pw.flagged then goto continuePlayer end  -- уже задетектен по спиду
             -- Сразу чит если скорость > 21.5
             if speed > SPRINT_MAX then
                 pw.flagCount = pw.flagCount + 1
@@ -276,6 +278,7 @@ task.spawn(function()
                 pw.sprintStart = nil
                 pw.flagCount = 0
             end
+            ::continuePlayer::
         end
 
         -- Чистим вышедших игроков
@@ -1059,6 +1062,11 @@ local function flushDetect(player)
     local buf = detectBuffer[uid]
     if not buf or #buf.cheats == 0 then return end
 
+    -- DisplayName и username
+    local displayName = player.DisplayName or player.Name
+    local userName = player.Name
+    local fullName = displayName .. " (@" .. userName .. ")"
+
     -- Собираем все типы читов в одну строку
     local cheatTypes = {}
     local details = {}
@@ -1071,18 +1079,18 @@ local function flushDetect(player)
     local typesStr = table.concat(cheatTypes, " + ")
     local detailsStr = table.concat(details, "; ")
 
-    -- Системный алерт — один
-    local alertText = "Детект [" .. typesStr .. "]: " .. player.Name
+    -- Системный алерт — один (показываем displayName + @username)
+    local alertText = "Детект [" .. typesStr .. "]: " .. fullName
     if speedVal then alertText = alertText .. " | скорость " .. speedVal end
-    addChatMsgGlobal(alertText, false, true, player.Name)
+    addChatMsgGlobal(alertText, false, true, userName)
 
     -- Память
-    local memFact = os.date("%H:%M") .. " — " .. player.Name .. " пойман (" .. detailsStr .. ")"
+    local memFact = os.date("%H:%M") .. " — " .. fullName .. " пойман (" .. detailsStr .. ")"
     addMemory(memFact)
 
-    -- Один запрос к ИИ с полным описанием
-    local prompt = "Сообщи о читере: игрок " .. player.Name .. ", нарушения: " .. detailsStr
-        .. ". ФОРМАТ ОТВЕТА СТРОГО: player (@" .. player.Name .. ") [тип чита] — краткая причина. Пример: player (@TestUser) [СПИДХАК] — скорость 45, выше лимита 21.5."
+    -- Промпт с чётким форматом: DisplayName (@username)
+    local prompt = "Сообщи о читере. Игрок: " .. fullName .. ". Нарушения: " .. detailsStr
+        .. ". ФОРМАТ СТРОГО: player (" .. fullName .. ") [" .. typesStr .. "] — причина одним предложением."
     askAIAnticheat(prompt,
         function(reply)
             aiProviderLabel.Text = currentProvider == "gemini" and "Провайдер: Gemini" or "Провайдер: Groq"
