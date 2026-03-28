@@ -130,8 +130,8 @@ end)
 -- 15-21  — ЧИТ если держится >= 5 сек непрерывно
 -- > 21   — сразу ЧИТ (независимо от времени)
 
-local WALK_MAX = 14          -- ниже этого — норма всегда
-local SPRINT_MAX = 21        -- выше этого — сразу чит
+local WALK_MAX = 15          -- 15 и ниже — норма всегда (ходьба выжившего)
+local SPRINT_MAX = 21        -- выше 21 — сразу чит
 local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
 
 -- Состояния слежки за каждым игроком
@@ -194,7 +194,7 @@ task.spawn(function()
             end
 
             -- Сразу чит если скорость > 21
-            if speed > SPRINT_MAX + 0.5 then
+            if speed > SPRINT_MAX then  -- строго больше 21
                 pw.flagCount = pw.flagCount + 1
                 if pw.flagCount >= 3 then -- 3 замера подряд чтобы не ложное
                     pw.flagged = true
@@ -203,7 +203,7 @@ task.spawn(function()
                     end
                 end
             -- Подозрительная зона 15-21: считаем время
-            elseif speed > WALK_MAX + 0.5 then
+            elseif speed > WALK_MAX then  -- строго больше 15 (т.е. от 16 и выше)
                 pw.flagCount = 0
                 if pw.sprintStart == nil then
                     pw.sprintStart = tick()
