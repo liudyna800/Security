@@ -696,13 +696,16 @@ aiPad.PaddingTop = UDim.new(0, 4); aiPad.PaddingBottom = UDim.new(0, 4)
 
 local function scrollToBottom()
     task.wait()
-    aiChatBox.CanvasPosition = Vector2.new(0, math.huge)
+    task.wait()
+    aiChatBox.CanvasPosition = Vector2.new(0, 99999)
 end
 
-local function addChatMsg(text, isAi, isAlert)
+local switchTab  -- forward declaration
+
+local function addChatMsg(text, isAi, isAlert, kickNick)
     local color
     if isAlert then
-        color = Color3.fromRGB(255, 100, 80)  -- красный для алертов античита
+        color = Color3.fromRGB(255, 100, 80)
     elseif isAi then
         color = Color3.fromRGB(140, 100, 255)
     else
@@ -710,13 +713,47 @@ local function addChatMsg(text, isAi, isAlert)
     end
     local prefix = isAlert and "[!] " or (isAi and "[ИИ] " or "[Ты] ")
 
+    -- Контейнер строки
+    local row = Instance.new("Frame")
+    row.Parent = aiChatBox
+    row.BackgroundTransparency = 1
+    row.Size = UDim2.new(1, 0, 0, 0)
+    row.AutomaticSize = Enum.AutomaticSize.Y
+    row.BorderSizePixel = 0
+
     local lbl = Instance.new("TextLabel")
-    lbl.Parent = aiChatBox; lbl.Text = prefix .. text
-    lbl.Size = UDim2.new(1, 0, 0, 0); lbl.AutomaticSize = Enum.AutomaticSize.Y
+    lbl.Parent = row; lbl.Text = prefix .. text
     lbl.BackgroundTransparency = 1; lbl.TextColor3 = color
     lbl.TextSize = 11; lbl.Font = Enum.Font.Gotham
     lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.TextWrapped = true
-    scrollToBottom()
+
+    -- Если это алерт с ником — добавляем кнопку "-> Кик"
+    if isAlert and kickNick then
+        lbl.Size = UDim2.new(1, -52, 0, 0)
+        lbl.AutomaticSize = Enum.AutomaticSize.Y
+
+        local kickBtn = Instance.new("TextButton")
+        kickBtn.Parent = row
+        kickBtn.Text = "-> Кик"
+        kickBtn.Size = UDim2.new(0, 46, 0, 20)
+        kickBtn.Position = UDim2.new(1, -50, 0, 1)
+        kickBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        kickBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        kickBtn.TextSize = 10
+        kickBtn.Font = Enum.Font.GothamBold
+        kickBtn.BorderSizePixel = 0
+        local kbc = Instance.new("UICorner"); kbc.CornerRadius = UDim.new(0, 4); kbc.Parent = kickBtn
+
+        kickBtn.MouseButton1Click:Connect(function()
+            InputField.Text = kickNick
+            switchTab(1)  -- переходим на вкладку кикера
+        end)
+    else
+        lbl.Size = UDim2.new(1, 0, 0, 0)
+        lbl.AutomaticSize = Enum.AutomaticSize.Y
+    end
+
+    task.defer(scrollToBottom)
 end
 
 -- Сохраняем функцию глобально для античита
@@ -841,7 +878,7 @@ tabPages[4] = settingsPage
 -- =============================================
 -- TAB SWITCHING
 -- =============================================
-local function switchTab(idx)
+switchTab = function(idx)
     for i, page in ipairs(tabPages) do
         page.Visible = (i == idx)
         local btn = tabButtons[i]
@@ -899,8 +936,8 @@ onCheatDetected = function(player, speed, reason)
         reasonText = "скорость " .. speedRounded .. " держится более 5 секунд"
     end
 
-    -- Алерт в чат (системный, без ИИ)
-    addChatMsgGlobal("Детект: " .. player.Name .. " | скорость " .. speedRounded, false, true)
+    -- Алерт в чат (системный, без ИИ) с кнопкой кика
+    addChatMsgGlobal("Детект: " .. player.Name .. " | скорость " .. speedRounded, false, true, player.Name)
 
     -- Запоминаем событие
     local memFact = os.date("%H:%M") .. " — " .. player.Name .. " пойман (" .. reasonText .. ")"
@@ -921,8 +958,6 @@ onCheatDetected = function(player, speed, reason)
         end
     )
 
-    -- Автоподставляем ник в кикер
-    InputField.Text = player.Name
 end
 
 -- =============================================
