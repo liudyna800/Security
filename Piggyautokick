@@ -131,7 +131,7 @@ end)
 -- > 21   — сразу ЧИТ (независимо от времени)
 
 local WALK_MAX = 15.5        -- буфер: 15.5 и ниже норма (ходьба=15, флуктуации до 15.5 ок)
-local SPRINT_MAX = 21        -- выше 21 — сразу чит
+local SPRINT_MAX = 21.5      -- буфер: выше 21.5 = сразу чит (21 это норм бег)
 local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
 
 -- Состояния слежки за каждым игроком
@@ -194,7 +194,7 @@ task.spawn(function()
             end
 
             -- Сразу чит если скорость > 21
-            if speed > SPRINT_MAX then  -- строго больше 21
+            if speed > SPRINT_MAX then  -- строго больше 21.5
                 pw.flagCount = pw.flagCount + 1
                 if pw.flagCount >= 3 then -- 3 замера подряд чтобы не ложное
                     pw.flagged = true
@@ -252,15 +252,54 @@ local function setAiStatus(txt, color)
 end
 
 -- Системный промпт с поддержкой античита и памяти
+-- Снапшот игроков онлайн для ИИ (обновляется каждые 2 сек)
+local playersSnapshot = {}
+task.spawn(function()
+    while true do
+        task.wait(2)
+        local snap = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= Players.LocalPlayer then
+                local spd = 0
+                local char = p.Character
+                if char then
+                    local hrp = char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local v = hrp.Velocity
+                        spd = math.floor(math.sqrt(v.X^2 + v.Z^2) * 10) / 10
+                    end
+                end
+                local pw = playerWatch[p.UserId]
+                local st = "норма"
+                if pw then
+                    if pw.flagged then st = "ЗАДЕТЕКТЕН"
+                    elseif pw.sprintStart then
+                        st = "подозрение " .. math.floor(tick() - pw.sprintStart) .. "с"
+                    end
+                end
+                table.insert(snap, p.Name .. " (скорость=" .. spd .. ", статус=" .. st .. ")")
+            end
+        end
+        playersSnapshot = snap
+    end
+end)
+
 local function buildSystemPrompt()
     local memBlock = buildMemoryBlock()
-    local prompt = [[Ты AI-ассистент для игры Piggy Build Mode в Roblox. Помогаешь модератору следить за игроками.
-Скорости в игре: Piggy=13, Выживший ходьба=15, Выживший бег=21 (норма до 5 сек).
-Если скорость >21 или скорость 15-21 держится >5 сек — это чит.
-Когда сообщаешь о читере — ОБЯЗАТЕЛЬНО пиши никнейм в формате player (@никнейм), точную скорость и коротко почему это чит.
-Пример: player (@TestUser) поймал скорость 28.5 — выше максимума 21, явный спидхак.
-Отвечай КОРОТКО, 1-3 предложения. Без лишней воды.
-Если тебя просят запомнить что-то — ответь "Запомнил: <факт>" в начале ответа.]]
+    local playersBlock = #playersSnapshot > 0
+        and ("\n\nИгроки онлайн:\n" .. table.concat(playersSnapshot, "\n"))
+        or "\n\nИгроков онлайн нет."
+
+    local prompt = [[Ты AI-ассистент для игры Piggy Build Mode в Roblox. Помогаешь модератору.
+Скорости: Piggy=13, выживший ходьба=15, бег=21 (норма до 5 сек).
+Чит: скорость>21.5 сразу, или 15.5-21.5 держится >5 сек.
+Когда сообщаешь о читере — пиши player (@никнейм), точную скорость, причину.
+СТРОГО: НИКОГДА не выдумывай ники, скорости или события. Отвечай только по данным списка игроков и памяти детектов.
+Если спросят про конкретного игрока — ищи его в списке онлайн и отвечай по реальным данным.
+Если игрока нет в списке — скажи что он не найден онлайн.
+Список нарушителей — только те у кого статус ЗАДЕТЕКТЕН или подозрение.
+Отвечай КОРОТКО, 1-3 предложения.
+Если просят запомнить — ответь "Запомнил: <факт>" в начале.]] .. playersBlock
     if memBlock ~= "" then
         prompt = prompt .. "\n\n" .. memBlock
     end
@@ -357,6 +396,8 @@ local function callGroq(userMsg)
 end
 
 local aiWorking = false
+local anticheatQueue = {}  -- очередь репортов античита
+
 local function askAI(userMsg, onReply, onStatus)
     if aiWorking then return end
     aiWorking = true
@@ -406,7 +447,25 @@ local function askAI(userMsg, onReply, onStatus)
             onReply("Не удалось получить ответ. Проверь ключи в Настройках.")
         end
         aiWorking = false
+        -- Обрабатываем очередь античита если есть
+        if #anticheatQueue > 0 then
+            local next = table.remove(anticheatQueue, 1)
+            task.wait(0.5)
+            askAI(next.msg, next.onReply, next.onStatus)
+        end
     end)
+end
+
+-- Отдельная функция для репортов античита — не блокирует пользователя
+local function askAIAnticheat(userMsg, onReply, onStatus)
+    if aiWorking then
+        -- Добавляем в очередь, но не больше 3 штук чтобы не спамить
+        if #anticheatQueue < 3 then
+            table.insert(anticheatQueue, {msg=userMsg, onReply=onReply, onStatus=onStatus})
+        end
+        return
+    end
+    askAI(userMsg, onReply, onStatus)
 end
 
 -- =============================================
@@ -684,7 +743,6 @@ aiChatBox.Size = UDim2.new(0.9, 0, 0, 130); aiChatBox.Position = UDim2.new(0.05,
 aiChatBox.BorderSizePixel = 0; aiChatBox.ScrollBarThickness = 3
 aiChatBox.ScrollBarImageColor3 = Color3.fromRGB(150, 0, 255)
 aiChatBox.ScrollingDirection = Enum.ScrollingDirection.Y
-aiChatBox.AutomaticCanvasSize = Enum.AutomaticSize.Y
 local aicc = Instance.new("UICorner"); aicc.CornerRadius = UDim.new(0,8); aicc.Parent = aiChatBox
 
 local aiLayout = Instance.new("UIListLayout")
@@ -696,8 +754,8 @@ aiPad.PaddingTop = UDim.new(0, 4); aiPad.PaddingBottom = UDim.new(0, 4)
 
 local function scrollToBottom()
     task.wait()
-    task.wait()
-    aiChatBox.CanvasPosition = Vector2.new(0, 99999)
+    aiChatBox.CanvasSize = UDim2.new(0, 0, 0, aiLayout.AbsoluteContentSize.Y + 10)
+    aiChatBox.CanvasPosition = Vector2.new(0, math.max(0, aiLayout.AbsoluteContentSize.Y - aiChatBox.AbsoluteSize.Y + 10))
 end
 
 local switchTab  -- forward declaration
@@ -720,6 +778,7 @@ local function addChatMsg(text, isAi, isAlert, kickNick)
     row.Size = UDim2.new(1, 0, 0, 0)
     row.AutomaticSize = Enum.AutomaticSize.Y
     row.BorderSizePixel = 0
+    row.ClipsDescendants = false
 
     local lbl = Instance.new("TextLabel")
     lbl.Parent = row; lbl.Text = prefix .. text
@@ -943,9 +1002,9 @@ onCheatDetected = function(player, speed, reason)
     local memFact = os.date("%H:%M") .. " — " .. player.Name .. " пойман (" .. reasonText .. ")"
     addMemory(memFact)
 
-    -- Отправляем запрос к ИИ — он сформирует репорт в нужном формате
+    -- Отправляем запрос к ИИ через очередь античита
     local prompt = "Сообщи о читере: игрок " .. player.Name .. ", " .. reasonText .. ". Используй формат player (@никнейм)."
-    askAI(prompt,
+    askAIAnticheat(prompt,
         function(reply)
             aiProviderLabel.Text = currentProvider == "gemini" and "Провайдер: Gemini" or "Провайдер: Groq"
             addChatMsgGlobal(reply, true)
