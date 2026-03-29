@@ -133,7 +133,7 @@ end)
 local WALK_MAX = 15.5        -- буфер: 15.5 и ниже норма (ходьба=15, флуктуации до 15.5 ок)
 local SPRINT_MAX = 21.5      -- буфер: выше 21.5 = сразу чит (21 это норм бег)
 local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
-local FLY_CHEAT_TIME = 3      -- секунд в воздухе без Freefall/Jump = флай
+local FLY_CHEAT_TIME = 5      -- секунд в воздухе = флай (анимации зацепления < 2 сек)
 
 -- =============================================
 -- СБРОС при респавне (grace 4 сек на приземление)
@@ -265,8 +265,8 @@ task.spawn(function()
                                     local dyPerSec = math.abs(yPos - pw.flyCheckY) / dtCheck
                                     -- При нормальном падении dyPerSec > 8 (гравитация ~196 studs/s^2)
                                     -- При флае dyPerSec < 3
-                                    if dyPerSec > 8 then
-                                        -- Нормальное падение — сбрасываем таймер
+                                    if dyPerSec > 3 then
+                                        -- Y активно меняется (падение или анимация) — сбрасываем таймер
                                         pw.airStart   = nil
                                         pw.flyLastY   = nil
                                         pw.flyCheckY  = nil
