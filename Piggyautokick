@@ -141,10 +141,11 @@ local FLY_CHEAT_TIME = 3      -- секунд в воздухе без Freefall/
 local function resetWatch(uid)
     playerWatch[uid] = {
         sprintStart = nil, airStart = nil,
-        flyLastY = nil, flyLastYTick = nil,
+        flyLastY = nil,
         flagged = false, flaggedFly = false,
         flagCount = 0,
-        spawnGrace = tick() + 10
+        spawnGrace = tick() + 4,
+        hasMoved = false
     }
 end
 
@@ -206,10 +207,11 @@ task.spawn(function()
                 -- Даём 4 сек на спавн — персонаж падает с воздуха при заходе
                 playerWatch[uid] = {
                     sprintStart = nil, airStart = nil,
-                    flyLastY = nil, flyLastYTick = nil,
+                    flyLastY = nil,
                     flagged = false, flaggedFly = false,
                     flagCount = 0,
-                    spawnGrace = tick() + 10  -- не детектим первые 10 сек (T-поза при загрузке)
+                    spawnGrace = tick() + 4,  -- небольшой grace на сам спавн
+                    hasMoved = false  -- флай детект включается только после первого шага
                 }
             end
 
@@ -228,45 +230,49 @@ task.spawn(function()
             local isNormalAir = isJumping or isFreefall  -- обычный прыжок/падение
 
             -- === ФЛАЙ ДЕТЕКТ ===
-            -- Логика: флай = игрок в воздухе без Freefall/Jump дольше FLY_CHEAT_TIME сек
-            -- НО: только если он реально "завис" — Y позиция почти не меняется
-            -- Это отличает флай от лестниц, неровного рельефа, анимации
+            -- Активируется только после первого шага игрока
+            -- Это исключает ложные срабатывания при спавне (провал сквозь блоки)
             if not pw.flaggedFly then
                 local char_ = player.Character
                 local hrp_ = char_ and char_:FindFirstChild("HumanoidRootPart")
                 local hum_ = char_ and char_:FindFirstChildOfClass("Humanoid")
                 if hrp_ and hum_ then
-                    local yVel    = hrp_.Velocity.Y
-                    local yPos    = hrp_.Position.Y
+                    local yVel     = hrp_.Velocity.Y
+                    local yPos     = hrp_.Position.Y
+                    local hSpd     = math.sqrt(hrp_.Velocity.X^2 + hrp_.Velocity.Z^2)
                     local onGround = hum_.FloorMaterial ~= Enum.Material.Air
 
-                    -- Условие подозрения на флай:
-                    -- не на земле + не обычный прыжок/падение + Y velocity мала (завис)
-                    -- yVel < 2 — при падении velocity быстро набирает >10, при флае остаётся ~0
-                    local isSuspect = not onGround and not isNormalAir and math.abs(yVel) < 2
+                    -- Фиксируем первый шаг
+                    if not pw.hasMoved and hSpd > 1 then
+                        pw.hasMoved = true
+                    end
 
-                    if isSuspect then
-                        if pw.airStart == nil then
-                            pw.airStart  = tick()
-                            pw.flyLastY  = yPos
-                        else
-                            -- Доп. проверка: Y позиция за время подозрения изменилась мало
-                            -- Если игрок падает — Y быстро меняется, если флай — стабильна
-                            local totalDY = math.abs(yPos - pw.flyLastY)
-                            local elapsed = tick() - pw.airStart
-                            -- За 3 сек при реальном падении Y меняется на >30 юнитов
-                            -- При флае — менее 5 юнитов
-                            if elapsed >= FLY_CHEAT_TIME and totalDY < 8 then
-                                pw.flaggedFly = true
-                                if onCheatDetected then
-                                    onCheatDetected(player, speed, "FLY")
+                    -- Флай детект только если игрок уже двигался
+                    if pw.hasMoved then
+                        -- Подозрение: не на земле + не прыжок/падение + Y velocity ~0 (завис)
+                        -- При флае yVel ~0, при падении быстро нарастает до >15
+                        local isSuspect = not onGround and not isNormalAir and math.abs(yVel) < 2
+
+                        if isSuspect then
+                            if pw.airStart == nil then
+                                pw.airStart = tick()
+                                pw.flyLastY = yPos
+                            else
+                                local elapsed = tick() - pw.airStart
+                                local totalDY = math.abs(yPos - pw.flyLastY)
+                                -- За FLY_CHEAT_TIME сек при реальном падении Y меняется >30
+                                -- При флае — стабильна (<8)
+                                if elapsed >= FLY_CHEAT_TIME and totalDY < 8 then
+                                    pw.flaggedFly = true
+                                    if onCheatDetected then
+                                        onCheatDetected(player, speed, "FLY")
+                                    end
                                 end
                             end
+                        else
+                            pw.airStart = nil
+                            pw.flyLastY = nil
                         end
-                    else
-                        -- Сбрасываем если приземлился или начал нормально падать
-                        pw.airStart = nil
-                        pw.flyLastY = nil
                     end
                 end
             end
