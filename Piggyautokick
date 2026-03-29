@@ -251,30 +251,54 @@ task.spawn(function()
                     -- Дебаг каждые 2 сек
                     if not pw.dbTick or tick() - pw.dbTick > 2 then
                         pw.dbTick = tick()
-                        print(("[SEC DBG] %s onGrd=%s normAir=%s moved=%s hSpd=%.1f yVel=%.1f air=%s"):format(
-                            player.Name, tostring(onGround), tostring(isNormalAir),
-                            tostring(pw.hasMoved), hSpd, yVel,
+                        local dyPs = 0
+                        if pw.flyCheckY then
+                            dyPs = math.abs(yPos - pw.flyCheckY)
+                        end
+                        print(("[SEC DBG] %s onGrd=%s moved=%s hSpd=%.1f yVel=%.1f dyPs=%.1f air=%s"):format(
+                            player.Name, tostring(onGround),
+                            tostring(pw.hasMoved), hSpd, yVel, dyPs,
                             pw.airStart and (string.format("%.1fs", tick()-pw.airStart)) or "nil"
                         ))
                     end
 
                     -- Флай детект только если игрок уже двигался
                     if pw.hasMoved then
-                        -- Подозрение на флай: не на земле + не Freefall/Jump
-                        local isSuspect = not onGround and not isNormalAir
+                        -- Ключевой инсайт из дебага: флай читы держат normAir=true (Freefall)
+                        -- поэтому фильтровать по HumanoidState нельзя.
+                        -- Детектим по физике: игрок в воздухе но Y почти не падает.
+                        -- При обычном Freefall Y меняется быстро: ~10+ юн/сек (гравитация).
+                        -- При флае Y стабильна или меняется очень медленно (<3 юн/сек).
 
-                        if isSuspect then
+                        if not onGround then
                             if pw.airStart == nil then
-                                pw.airStart = tick()
-                                pw.flyLastY = yPos
+                                pw.airStart  = tick()
+                                pw.flyLastY  = yPos
+                                pw.flyCheckY = yPos
                             else
                                 local elapsed = tick() - pw.airStart
-                                -- Проверяем что Y за это время не сильно изменилась
-                                -- При обычном падении (Freefall) уже отфильтровано
-                                -- Здесь страхуемся от лестниц/пандусов: dy < 15 за elapsed
-                                local totalDY = math.abs(yPos - pw.flyLastY)
-                                local maxNormalDY = elapsed * 5  -- норма: макс 5 юн/сек дрейфа
-                                if elapsed >= FLY_CHEAT_TIME and totalDY < maxNormalDY then
+
+                                -- Каждую секунду замеряем скорость падения Y
+                                if not pw.flyCheckTick then pw.flyCheckTick = tick() end
+                                local dtCheck = tick() - pw.flyCheckTick
+                                if dtCheck >= 1.0 then
+                                    local dyPerSec = math.abs(yPos - pw.flyCheckY) / dtCheck
+                                    -- При нормальном падении dyPerSec > 8 (гравитация ~196 studs/s^2)
+                                    -- При флае dyPerSec < 3
+                                    if dyPerSec > 8 then
+                                        -- Нормальное падение — сбрасываем таймер
+                                        pw.airStart   = nil
+                                        pw.flyLastY   = nil
+                                        pw.flyCheckY  = nil
+                                        pw.flyCheckTick = nil
+                                    else
+                                        pw.flyCheckY    = yPos
+                                        pw.flyCheckTick = tick()
+                                    end
+                                end
+
+                                -- Если в воздухе >= FLY_CHEAT_TIME и airStart ещё не сброшен
+                                if pw.airStart and elapsed >= FLY_CHEAT_TIME then
                                     pw.flaggedFly = true
                                     if onCheatDetected then
                                         onCheatDetected(player, speed, "FLY")
@@ -282,8 +306,11 @@ task.spawn(function()
                                 end
                             end
                         else
-                            pw.airStart = nil
-                            pw.flyLastY = nil
+                            -- Приземлился — сбрасываем всё
+                            pw.airStart     = nil
+                            pw.flyLastY     = nil
+                            pw.flyCheckY    = nil
+                            pw.flyCheckTick = nil
                         end
                     end
                 end
