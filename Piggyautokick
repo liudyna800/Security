@@ -303,6 +303,15 @@ task.spawn(function()
                                     if onCheatDetected then
                                         onCheatDetected(player, speed, "FLY")
                                     end
+                                    -- Сбрасываем через 8 сек чтобы ловить повторные влёты
+                                    task.delay(8, function()
+                                        if playerWatch[player.UserId] then
+                                            playerWatch[player.UserId].flaggedFly = false
+                                            playerWatch[player.UserId].airStart    = nil
+                                            playerWatch[player.UserId].flyCheckY   = nil
+                                            playerWatch[player.UserId].flyCheckTick = nil
+                                        end
+                                    end)
                                 end
                             end
                         else
@@ -331,6 +340,13 @@ task.spawn(function()
                         if onCheatDetected then
                             onCheatDetected(player, speed, "SPEED_OVER_MAX")
                         end
+                        task.delay(8, function()
+                            if playerWatch[player.UserId] then
+                                playerWatch[player.UserId].flagged    = false
+                                playerWatch[player.UserId].flagCount  = 0
+                                playerWatch[player.UserId].sprintStart = nil
+                            end
+                        end)
                     end
                 elseif speed > WALK_MAX then
                     pw.flagCount = 0
@@ -343,6 +359,13 @@ task.spawn(function()
                             if onCheatDetected then
                                 onCheatDetected(player, speed, "SPEED_SUSTAINED")
                             end
+                            task.delay(8, function()
+                                if playerWatch[player.UserId] then
+                                    playerWatch[player.UserId].flagged     = false
+                                    playerWatch[player.UserId].flagCount   = 0
+                                    playerWatch[player.UserId].sprintStart = nil
+                                end
+                            end)
                         end
                     end
                 else
