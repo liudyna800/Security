@@ -135,6 +135,34 @@ local SPRINT_MAX = 21.5      -- буфер: выше 21.5 = сразу чит (2
 local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
 local FLY_CHEAT_TIME = 3      -- секунд в воздухе без Freefall/Jump = флай
 
+-- =============================================
+-- СБРОС при респавне (grace 4 сек на приземление)
+-- =============================================
+local function resetWatch(uid)
+    playerWatch[uid] = {
+        sprintStart = nil, airStart = nil,
+        flyLastY = nil, flyLastYTick = nil,
+        flagged = false, flaggedFly = false,
+        flagCount = 0,
+        spawnGrace = tick() + 4
+    }
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        resetWatch(player.UserId)
+    end)
+end)
+
+-- Для уже зашедших игроков
+for _, player in ipairs(Players:GetPlayers()) do
+    if player.Character then
+        player.CharacterAdded:Connect(function()
+            resetWatch(player.UserId)
+        end)
+    end
+end
+
 -- Состояния слежки за каждым игроком
 local playerWatch = {}
 -- playerWatch[userId] = {
@@ -175,10 +203,20 @@ task.spawn(function()
 
             local uid = player.UserId
             if not playerWatch[uid] then
-                playerWatch[uid] = {sprintStart = nil, airStart = nil, flagged = false, flaggedFly = false, flagCount = 0}
+                -- Даём 4 сек на спавн — персонаж падает с воздуха при заходе
+                playerWatch[uid] = {
+                    sprintStart = nil, airStart = nil,
+                    flyLastY = nil, flyLastYTick = nil,
+                    flagged = false, flaggedFly = false,
+                    flagCount = 0,
+                    spawnGrace = tick() + 4  -- не детектим первые 4 сек
+                }
             end
 
             local pw = playerWatch[uid]
+            -- Пропускаем пока действует grace period после спавна
+            if tick() < pw.spawnGrace then continue end
+
             if pw.flagged and pw.flaggedFly then continue end
 
             local speed = getHorizontalSpeed(player)
