@@ -245,13 +245,22 @@ task.spawn(function()
                     -- Фиксируем первый шаг или прыжок
                     if not pw.hasMoved and (hSpd > 1 or isJumping) then
                         pw.hasMoved = true
+                        print("[SEC] " .. player.Name .. " — детект активен")
+                    end
+
+                    -- Дебаг каждые 2 сек
+                    if not pw.dbTick or tick() - pw.dbTick > 2 then
+                        pw.dbTick = tick()
+                        print(("[SEC DBG] %s onGrd=%s normAir=%s moved=%s hSpd=%.1f yVel=%.1f air=%s"):format(
+                            player.Name, tostring(onGround), tostring(isNormalAir),
+                            tostring(pw.hasMoved), hSpd, yVel,
+                            pw.airStart and (string.format("%.1fs", tick()-pw.airStart)) or "nil"
+                        ))
                     end
 
                     -- Флай детект только если игрок уже двигался
                     if pw.hasMoved then
-                            -- Подозрение на флай: не на земле + не Freefall/Jump
-                        -- Freefall/Jump это обычный прыжок — уже отфильтровано isNormalAir
-                        -- Флай читак висит в состоянии Running/Swimming/None в воздухе
+                        -- Подозрение на флай: не на земле + не Freefall/Jump
                         local isSuspect = not onGround and not isNormalAir
 
                         if isSuspect then
