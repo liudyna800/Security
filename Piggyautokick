@@ -250,35 +250,33 @@ task.spawn(function()
             end
 
             -- === СКОРОСТЬ ДЕТЕКТ ===
-            if pw.flagged then goto continuePlayer end  -- уже задетектен по спиду
-            -- Сразу чит если скорость > 21.5
-            if speed > SPRINT_MAX then
-                pw.flagCount = pw.flagCount + 1
-                if pw.flagCount >= 3 then
-                    pw.flagged = true
-                    if onCheatDetected then
-                        onCheatDetected(player, speed, "SPEED_OVER_MAX")
-                    end
-                end
-            -- Подозрительная зона 15.5-21.5: считаем время
-            elseif speed > WALK_MAX then
-                pw.flagCount = 0
-                if pw.sprintStart == nil then
-                    pw.sprintStart = tick()
-                else
-                    local elapsed = tick() - pw.sprintStart
-                    if elapsed >= SPRINT_CHEAT_TIME then
+            if not pw.flagged then
+                if speed > SPRINT_MAX then
+                    pw.flagCount = pw.flagCount + 1
+                    if pw.flagCount >= 3 then
                         pw.flagged = true
                         if onCheatDetected then
-                            onCheatDetected(player, speed, "SPEED_SUSTAINED")
+                            onCheatDetected(player, speed, "SPEED_OVER_MAX")
                         end
                     end
+                elseif speed > WALK_MAX then
+                    pw.flagCount = 0
+                    if pw.sprintStart == nil then
+                        pw.sprintStart = tick()
+                    else
+                        local elapsed = tick() - pw.sprintStart
+                        if elapsed >= SPRINT_CHEAT_TIME then
+                            pw.flagged = true
+                            if onCheatDetected then
+                                onCheatDetected(player, speed, "SPEED_SUSTAINED")
+                            end
+                        end
+                    end
+                else
+                    pw.sprintStart = nil
+                    pw.flagCount = 0
                 end
-            else
-                pw.sprintStart = nil
-                pw.flagCount = 0
             end
-            ::continuePlayer::
         end
 
         -- Чистим вышедших игроков
