@@ -1133,6 +1133,119 @@ task.defer(function()
 end)
 
 -- =============================================
+-- КНОПКА СВЕРНУТЬ + ПЛАВАЮЩИЙ ШАР
+-- =============================================
+
+-- Загружаем сохранённую позицию шара
+local BUBBLE_POS_FILE = "security_bubble_pos.json"
+local bubblePosX, bubblePosY = 0.9, 0.85  -- дефолт: правый нижний угол
+
+pcall(function()
+    if isfile(BUBBLE_POS_FILE) then
+        local d = HttpService:JSONDecode(readfile(BUBBLE_POS_FILE))
+        bubblePosX = d.x or bubblePosX
+        bubblePosY = d.y or bubblePosY
+    end
+end)
+
+-- Шар (появляется когда свёрнуто)
+local BubbleBtn = Instance.new("TextButton", ScreenGui)
+BubbleBtn.Size             = UDim2.new(0, 54, 0, 54)
+BubbleBtn.Position         = UDim2.new(bubblePosX, -27, bubblePosY, -27)
+BubbleBtn.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
+BubbleBtn.Text             = "🛡️"
+BubbleBtn.TextSize         = 22
+BubbleBtn.BorderSizePixel  = 0
+BubbleBtn.Visible          = false
+BubbleBtn.Active           = true
+BubbleBtn.ZIndex           = 10
+Instance.new("UICorner", BubbleBtn).CornerRadius = UDim.new(1, 0)
+local bubbleStroke = Instance.new("UIStroke", BubbleBtn)
+bubbleStroke.Color     = Color3.fromRGB(0, 150, 255)
+bubbleStroke.Thickness = 2
+
+-- Кнопка свернуть в хедере
+local minimizeBtn = Instance.new("TextButton", Header)
+minimizeBtn.Text             = "—"
+minimizeBtn.Size             = UDim2.new(0, 22, 0, 22)
+minimizeBtn.Position         = UDim2.new(1, -72, 0.5, -11)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+minimizeBtn.TextColor3       = Color3.fromRGB(180, 180, 200)
+minimizeBtn.TextSize         = 14
+minimizeBtn.Font             = Enum.Font.GothamBold
+minimizeBtn.BorderSizePixel  = 0
+minimizeBtn.ZIndex           = 5
+Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 6)
+
+local isMinimized = false
+
+local function setMinimized(val)
+    isMinimized = val
+    MainFrame.Visible = not val
+    BubbleBtn.Visible = val
+end
+
+minimizeBtn.MouseButton1Click:Connect(function()
+    -- Позиционируем шар рядом с кнопкой свернуть
+    local minBtnPos = minimizeBtn.AbsolutePosition
+    local vp = workspace.CurrentCamera.ViewportSize
+    bubblePosX = math.clamp((minBtnPos.X + 11) / vp.X, 0.05, 0.95)
+    bubblePosY = math.clamp((minBtnPos.Y + 11) / vp.Y, 0.05, 0.95)
+    BubbleBtn.Position = UDim2.new(bubblePosX, -27, bubblePosY, -27)
+    pcall(function()
+        writefile(BUBBLE_POS_FILE, HttpService:JSONEncode({x=bubblePosX, y=bubblePosY}))
+    end)
+    setMinimized(true)
+end)
+
+-- Разворачиваем по клику на шар
+BubbleBtn.MouseButton1Click:Connect(function()
+    setMinimized(false)
+end)
+
+-- Перетаскивание шара
+local draggingBubble = false
+local dragStartMouse = nil
+local dragStartPos   = nil
+
+BubbleBtn.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1
+    or inp.UserInputType == Enum.UserInputType.Touch then
+        draggingBubble = true
+        dragStartMouse = Vector2.new(inp.Position.X, inp.Position.Y)
+        local p = BubbleBtn.Position
+        dragStartPos = Vector2.new(p.X.Scale, p.Y.Scale)
+    end
+end)
+
+game:GetService("UserInputService").InputChanged:Connect(function(inp)
+    if not draggingBubble then return end
+    if inp.UserInputType == Enum.UserInputType.MouseMovement
+    or inp.UserInputType == Enum.UserInputType.Touch then
+        local vp   = workspace.CurrentCamera.ViewportSize
+        local dx   = (inp.Position.X - dragStartMouse.X) / vp.X
+        local dy   = (inp.Position.Y - dragStartMouse.Y) / vp.Y
+        local nx   = math.clamp(dragStartPos.X + dx, 0.04, 0.96)
+        local ny   = math.clamp(dragStartPos.Y + dy, 0.04, 0.96)
+        BubbleBtn.Position = UDim2.new(nx, -27, ny, -27)
+        bubblePosX = nx; bubblePosY = ny
+    end
+end)
+
+game:GetService("UserInputService").InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1
+    or inp.UserInputType == Enum.UserInputType.Touch then
+        if draggingBubble then
+            draggingBubble = false
+            -- Сохраняем позицию
+            pcall(function()
+                writefile(BUBBLE_POS_FILE, HttpService:JSONEncode({x=bubblePosX, y=bubblePosY}))
+            end)
+        end
+    end
+end)
+
+-- =============================================
 -- CALLBACK античита: буферизация → одно сообщение на игрока
 -- =============================================
 local detectBuffer = {}  -- detectBuffer[userId] = {cheats = {}, timer = nil}
