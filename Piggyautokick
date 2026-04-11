@@ -1,5 +1,5 @@
--- [[ SECURITY V5 — ANTICHEAT AI EDITION ]]
--- Вкладки: Кикер | Blacklist | AI Chat | Настройки
+-- [[ SECURITY V5 — ANTICHEAT EDITION ]]
+-- Tabs: Kicker | Blacklist | Logs | Settings
 
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
@@ -7,13 +7,16 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 -- =============================================
--- НАСТРОЙКИ
+-- SETTINGS
 -- =============================================
 local SETTINGS_FILE = "security_settings.json"
 local BLACKLIST_FILE = "security_blacklist.json"
-local MEMORY_FILE = "security_ai_memory.json"
 
-local settings = { geminiKey = "", groqKey = "" }
+local settings = { 
+    walkMax = 15.5,      -- Threshold where sustained timer starts
+    sprintMax = 21.5,    -- Instant cheat threshold
+    sprintTime = 5.0     -- Seconds before sustained speed is flagged
+}
 
 local function saveSettings()
     pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(settings)) end)
@@ -22,44 +25,11 @@ local function loadSettings()
     pcall(function()
         if isfile(SETTINGS_FILE) then
             local data = HttpService:JSONDecode(readfile(SETTINGS_FILE))
-            for k, v in pairs(data) do settings[k] = v end
+            for k, v in pairs(data) do settings[k] = tonumber(v) or v end
         end
     end)
 end
 loadSettings()
-
--- =============================================
--- ПАМЯТЬ ИИ (сохраняется между сессиями)
--- =============================================
-local aiMemory = {}  -- список строк, факты которые ИИ запомнил
-
-local function saveMemory()
-    pcall(function() writefile(MEMORY_FILE, HttpService:JSONEncode(aiMemory)) end)
-end
-local function loadMemory()
-    pcall(function()
-        if isfile(MEMORY_FILE) then
-            aiMemory = HttpService:JSONDecode(readfile(MEMORY_FILE))
-        end
-    end)
-end
-loadMemory()
-
-local function addMemory(fact)
-    table.insert(aiMemory, fact)
-    -- Ограничиваем 50 фактами
-    while #aiMemory > 50 do table.remove(aiMemory, 1) end
-    saveMemory()
-end
-
-local function buildMemoryBlock()
-    if #aiMemory == 0 then return "" end
-    local lines = {"Твоя память о прошлых событиях:"}
-    for _, m in ipairs(aiMemory) do
-        table.insert(lines, "- " .. m)
-    end
-    return table.concat(lines, "\n")
-end
 
 -- =============================================
 -- BLACKLIST
@@ -85,7 +55,7 @@ end
 loadBlacklist()
 
 -- =============================================
--- AUTO-KICK по блэклисту (фоновый поток)
+-- AUTO-KICK BLACKLIST (Background Thread)
 -- =============================================
 task.spawn(function()
     while true do
@@ -121,42 +91,26 @@ task.spawn(function()
 end)
 
 -- =============================================
--- ANTICHEAT: детектор скорости
+-- ANTICHEAT WATCH & VARIABLES
 -- =============================================
--- Порог скоростей Piggy Build Mode:
--- Piggy: 13 | Выживший ходьба: 15 | Выживший бег: 21
--- <= 14  — норма (джойстик, медленная ходьба)
--- 15-21  — норма если держится < 5 сек
--- 15-21  — ЧИТ если держится >= 5 сек непрерывно
--- > 21   — сразу ЧИТ (независимо от времени)
-
-local WALK_MAX = 15.5        -- буфер: 15.5 и ниже норма (ходьба=15, флуктуации до 15.5 ок)
-local SPRINT_MAX = 21.5      -- буфер: выше 21.5 = сразу чит (21 это норм бег)
-local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
-
--- =============================================
--- СБРОС при респавне (grace 4 сек на приземление)
--- =============================================
-local playerWatch = {}  -- [userId] = {...}
+local playerWatch = {}
 
 local function resetWatch(uid)
     playerWatch[uid] = {
         sprintStart = nil,
         flagged     = false,
         flagCount   = 0,
-        -- Флай тип 1: долгий Freefall/Jump
-        flyStart    = nil,   -- когда начался Freefall/Jump
+        flyStart    = nil,
         flaggedFly1 = false,
-        -- Флай тип 2: наклон персонажа
-        tiltStart   = nil,   -- когда начался наклон
+        tiltStart   = nil,
         flaggedFly2 = false,
         _char       = nil,
     }
 end
 
-local FLY1_TIME = 4  -- сек в Freefall/Jump = чит
-local FLY2_TIME = 4  -- сек под наклоном = чит
-local TILT_THRESHOLD = 0.7  -- UpVector.Y < 0.7 = наклон (норма = 1.0)
+local FLY1_TIME = 4
+local FLY2_TIME = 4
+local TILT_THRESHOLD = 0.7
 
 Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
@@ -164,7 +118,6 @@ Players.PlayerAdded:Connect(function(player)
     end)
 end)
 
--- Для уже зашедших игроков
 for _, player in ipairs(Players:GetPlayers()) do
     if player.Character then
         player.CharacterAdded:Connect(function()
@@ -173,13 +126,10 @@ for _, player in ipairs(Players:GetPlayers()) do
     end
 end
 
-
-
-local addChatMsgGlobal = nil  -- будет задан после GUI
-local onCheatDetected = nil   -- callback
+local addLogMsgGlobal = nil
+local onCheatDetected = nil
 
 local function getHorizontalSpeed(player)
-    -- Получаем скорость по горизонтали, игнорируем вертикальную (падение/прыжок)
     local char = player.Character
     if not char then return 0 end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -196,7 +146,9 @@ local function getHumanoidState(player)
     return hum:GetState()
 end
 
--- Фоновый мониторинг скоростей
+-- =============================================
+-- ANTICHEAT MONITORING
+-- =============================================
 task.spawn(function()
     while true do
         task.wait(0.25)
@@ -211,7 +163,6 @@ task.spawn(function()
                     playerWatch[uid]._char = char
                 end
             else
-                -- Если персонаж сменился (перезаход/респавн) — сбрасываем
                 if playerWatch[uid]._char ~= char then
                     resetWatch(uid)
                     playerWatch[uid]._char = char
@@ -219,29 +170,20 @@ task.spawn(function()
             end
 
             local pw = playerWatch[uid]
-
             if pw.flagged then continue end
 
             local speed = getHorizontalSpeed(player)
             local state = getHumanoidState(player)
 
-            -- Определяем состояния
-            local isJumping = state == Enum.HumanoidStateType.Jumping
-            local isFreefall = state == Enum.HumanoidStateType.Freefall
-            local isNormalAir = isJumping or isFreefall  -- обычный прыжок/падение
-
-            -- === ФЛАЙ ДЕТЕКТ ТИП 1: долгий Freefall/Jump ===
+            -- Fly Detect 1: Long Freefall/Jump
             if not pw.flaggedFly1 then
-                local isAir = state == Enum.HumanoidStateType.Freefall
-                           or state == Enum.HumanoidStateType.Jumping
+                local isAir = state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping
                 if isAir then
                     if pw.flyStart == nil then
                         pw.flyStart = tick()
                     elseif tick() - pw.flyStart >= FLY1_TIME then
                         pw.flaggedFly1 = true
-                        if onCheatDetected then
-                            onCheatDetected(player, speed, "FLY1")
-                        end
+                        if onCheatDetected then onCheatDetected(player, speed, "FLY1") end
                         task.delay(8, function()
                             if playerWatch[player.UserId] then
                                 playerWatch[player.UserId].flaggedFly1 = false
@@ -254,32 +196,26 @@ task.spawn(function()
                 end
             end
 
-            -- === ФЛАЙ ДЕТЕКТ ТИП 2: наклон торса (BodyGyro флай) ===
-            -- Fly GUI V3 наклоняет UpperTorso/Torso через BodyGyro
-            -- Swimming состояние + наклон = флай
+            -- Fly Detect 2: Torso Tilt / Fake Swim
             if not pw.flaggedFly2 then
                 local char_ = player.Character
                 if char_ then
-                    -- Проверяем торс (R15 = UpperTorso, R6 = Torso)
                     local torso_ = char_:FindFirstChild("UpperTorso") or char_:FindFirstChild("Torso")
                     local hum_   = char_:FindFirstChildOfClass("Humanoid")
                     if torso_ and hum_ then
                         local upY    = torso_.CFrame.UpVector.Y
                         local state_ = hum_:GetState()
                         local isSwim = state_ == Enum.HumanoidStateType.Swimming
-                        -- Наклон: UpVector.Y < 0.7 (норма = 1.0)
-                        -- Или: Swimming состояние пока не в воде (FloorMaterial != Water)
                         local inWater = hum_.FloorMaterial == Enum.Material.Water
                         local isTilted = upY < TILT_THRESHOLD
                         local isSuspect = isTilted or (isSwim and not inWater)
+                        
                         if isSuspect then
                             if pw.tiltStart == nil then
                                 pw.tiltStart = tick()
                             elseif tick() - pw.tiltStart >= FLY2_TIME then
                                 pw.flaggedFly2 = true
-                                if onCheatDetected then
-                                    onCheatDetected(player, speed, "FLY2")
-                                end
+                                if onCheatDetected then onCheatDetected(player, speed, "FLY2") end
                                 task.delay(8, function()
                                     if playerWatch[player.UserId] then
                                         playerWatch[player.UserId].flaggedFly2 = false
@@ -294,15 +230,13 @@ task.spawn(function()
                 end
             end
 
-            -- === СКОРОСТЬ ДЕТЕКТ ===
+            -- Speedhack Detect (Uses Live Settings)
             if not pw.flagged then
-                if speed > SPRINT_MAX then
+                if speed > settings.sprintMax then
                     pw.flagCount = pw.flagCount + 1
                     if pw.flagCount >= 3 then
                         pw.flagged = true
-                        if onCheatDetected then
-                            onCheatDetected(player, speed, "SPEED_OVER_MAX")
-                        end
+                        if onCheatDetected then onCheatDetected(player, speed, "SPEED_OVER_MAX") end
                         task.delay(8, function()
                             if playerWatch[player.UserId] then
                                 playerWatch[player.UserId].flagged    = false
@@ -311,17 +245,15 @@ task.spawn(function()
                             end
                         end)
                     end
-                elseif speed > WALK_MAX then
+                elseif speed > settings.walkMax then
                     pw.flagCount = 0
                     if pw.sprintStart == nil then
                         pw.sprintStart = tick()
                     else
                         local elapsed = tick() - pw.sprintStart
-                        if elapsed >= SPRINT_CHEAT_TIME then
+                        if elapsed >= settings.sprintTime then
                             pw.flagged = true
-                            if onCheatDetected then
-                                onCheatDetected(player, speed, "SPEED_SUSTAINED")
-                            end
+                            if onCheatDetected then onCheatDetected(player, speed, "SPEED_SUSTAINED") end
                             task.delay(8, function()
                                 if playerWatch[player.UserId] then
                                     playerWatch[player.UserId].flagged     = false
@@ -338,7 +270,6 @@ task.spawn(function()
             end
         end
 
-        -- Чистим вышедших игроков
         for uid in pairs(playerWatch) do
             local found = false
             for _, p in ipairs(Players:GetPlayers()) do
@@ -350,243 +281,7 @@ task.spawn(function()
 end)
 
 -- =============================================
--- AI ДВИЖОК: Gemini + Groq fallback
--- =============================================
-local geminiLimitUntil = 0
-local groqTokensUsed = 0
-local groqMinuteStart = tick()
-local GROQ_LIMIT = 6000
-local currentProvider = "gemini"
-local aiStatusLabel = nil
-
-local function setAiStatus(txt, color)
-    if aiStatusLabel then
-        aiStatusLabel.Text = txt
-        aiStatusLabel.TextColor3 = color or Color3.fromRGB(120, 120, 150)
-    end
-end
-
--- Системный промпт с поддержкой античита и памяти
--- Снапшот игроков онлайн для ИИ (обновляется каждые 2 сек)
-local playersSnapshot = {}
-task.spawn(function()
-    while true do
-        task.wait(2)
-        local snap = {}
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= Players.LocalPlayer then
-                local spd = 0
-                local char = p.Character
-                if char then
-                    local hrp = char:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        local v = hrp.Velocity
-                        spd = math.floor(math.sqrt(v.X^2 + v.Z^2) * 10) / 10
-                    end
-                end
-                local pw = playerWatch[p.UserId]
-                local st = "норма"
-                if pw then
-                    if pw.flagged then
-                        st = "ЗАДЕТЕКТЕН"
-                    elseif pw.sprintStart then
-                        st = "подозрение " .. math.floor(tick() - pw.sprintStart) .. "с"
-                    end
-                end
-                table.insert(snap, p.Name .. " (скорость=" .. spd .. ", статус=" .. st .. ")")
-            end
-        end
-        playersSnapshot = snap
-    end
-end)
-
-local function buildSystemPrompt()
-    local memBlock = buildMemoryBlock()
-    -- Снапшот также в системном промпте для контекста
-    local playersBlock = #playersSnapshot > 0
-        and ("\n\nИгроки онлайн (обновляется каждые 2 сек):\n" .. table.concat(playersSnapshot, "\n"))
-        or "\n\nИгроков онлайн нет."
-
-    local prompt = [[Ты AI-ассистент для игры Piggy Build Mode в Roblox. Помогаешь модератору.
-Скорости: Piggy=13, выживший ходьба=15, бег=21 (норма до 5 сек).
-Чит: скорость>21.5 сразу, или 15.5-21.5 держится >5 сек.
-Когда сообщаешь о читере — пиши player (@никнейм), точную скорость, причину.
-СТРОГО: НИКОГДА не выдумывай ники, скорости или события. Отвечай только по данным списка игроков и памяти детектов.
-Если спросят про конкретного игрока — ищи его в списке онлайн и отвечай по реальным данным.
-Если игрока нет в списке — скажи что он не найден онлайн.
-Список нарушителей — только те у кого статус ЗАДЕТЕКТЕН или подозрение.
-Отвечай КОРОТКО, 1-3 предложения.
-Если просят запомнить — ответь "Запомнил: <факт>" в начале.]] .. playersBlock
-    if memBlock ~= "" then
-        prompt = prompt .. "\n\n" .. memBlock
-    end
-    return prompt
-end
-
-local chatHistory = {}
-
-local function buildGeminiBody(userMsg)
-    local contents = {}
-    for _, m in ipairs(chatHistory) do
-        table.insert(contents, {
-            role = m.role == "assistant" and "model" or "user",
-            parts = {{text = m.content}}
-        })
-    end
-    table.insert(contents, {role = "user", parts = {{text = userMsg}}})
-    return HttpService:JSONEncode({
-        system_instruction = {parts = {{text = buildSystemPrompt()}}},
-        contents = contents,
-        generationConfig = {maxOutputTokens = 200, temperature = 0.7}
-    })
-end
-
-local function buildGroqBody(userMsg)
-    local messages = {{role = "system", content = buildSystemPrompt()}}
-    for _, m in ipairs(chatHistory) do
-        table.insert(messages, {role = m.role, content = m.content})
-    end
-    table.insert(messages, {role = "user", content = userMsg})
-    return HttpService:JSONEncode({
-        model = "openai/gpt-oss-120b",
-        messages = messages,
-        max_tokens = 200,
-        temperature = 0.7
-    })
-end
-
-local function callGemini(userMsg)
-    local key = settings.geminiKey
-    if key == "" then return nil, "no_key" end
-    local url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=" .. key
-    local ok, res = pcall(function()
-        return request({
-            Url = url, Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = buildGeminiBody(userMsg)
-        })
-    end)
-    if not ok then return nil, "error" end
-    if res.StatusCode == 429 then return nil, "rate_limit" end
-    if res.StatusCode ~= 200 then return nil, "error" end
-    local data = HttpService:JSONDecode(res.Body)
-    local text = data and data.candidates and data.candidates[1]
-        and data.candidates[1].content and data.candidates[1].content.parts
-        and data.candidates[1].content.parts[1] and data.candidates[1].content.parts[1].text
-    return text, nil
-end
-
-local function callGroq(userMsg)
-    local key = settings.groqKey
-    if key == "" then return nil, "no_key" end
-    local now = tick()
-    if now - groqMinuteStart >= 60 then
-        groqTokensUsed = 0; groqMinuteStart = now
-    end
-    while groqTokensUsed >= GROQ_LIMIT do
-        local waitSec = 60 - (tick() - groqMinuteStart)
-        if waitSec <= 0 then groqTokensUsed = 0; groqMinuteStart = tick(); break end
-        setAiStatus("Groq лимит, жду " .. math.ceil(waitSec) .. "с...", Color3.fromRGB(255, 180, 0))
-        task.wait(2)
-        if tick() > geminiLimitUntil and currentProvider == "groq" then
-            currentProvider = "gemini"
-            return nil, "switch_to_gemini"
-        end
-    end
-    local ok, res = pcall(function()
-        return request({
-            Url = "https://api.groq.com/openai/v1/chat/completions",
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json", ["Authorization"] = "Bearer " .. key},
-            Body = buildGroqBody(userMsg)
-        })
-    end)
-    if not ok then return nil, "error" end
-    if res.StatusCode == 429 then groqTokensUsed = GROQ_LIMIT; return nil, "rate_limit" end
-    if res.StatusCode ~= 200 then return nil, "error" end
-    local data = HttpService:JSONDecode(res.Body)
-    local text = data and data.choices and data.choices[1] and data.choices[1].message and data.choices[1].message.content
-    if text then
-        groqTokensUsed = groqTokensUsed + math.ceil(#text / 4) + math.ceil(#buildGroqBody(userMsg) / 4)
-    end
-    return text, nil
-end
-
-local aiWorking = false
-local anticheatQueue = {}  -- очередь репортов античита
-
-local function askAI(userMsg, onReply, onStatus)
-    if aiWorking then return end
-    aiWorking = true
-    task.spawn(function()
-        local reply = nil
-        local attempt = 0
-        while not reply and attempt < 10 do
-            attempt = attempt + 1
-            if currentProvider == "groq" and tick() > geminiLimitUntil then
-                currentProvider = "gemini"
-                onStatus("Gemini восстановлен", Color3.fromRGB(0, 200, 100))
-                task.wait(0.3)
-            end
-            if currentProvider == "gemini" then
-                onStatus("Думаю (Gemini)...", Color3.fromRGB(100, 180, 255))
-                local text, err = callGemini(userMsg)
-                if text then reply = text
-                elseif err == "rate_limit" then
-                    geminiLimitUntil = tick() + 65; currentProvider = "groq"
-                    onStatus("Gemini лимит -> Groq", Color3.fromRGB(255, 180, 0)); task.wait(0.5)
-                elseif err == "no_key" then
-                    onStatus("Нет ключа Gemini!", Color3.fromRGB(255, 80, 80)); currentProvider = "groq"
-                else onStatus("Ошибка Gemini", Color3.fromRGB(255, 80, 80)); task.wait(2) end
-            elseif currentProvider == "groq" then
-                onStatus("Думаю (Groq)...", Color3.fromRGB(180, 100, 255))
-                local text, err = callGroq(userMsg)
-                if text then reply = text
-                elseif err == "switch_to_gemini" then currentProvider = "gemini"
-                elseif err == "no_key" then
-                    onStatus("Нет ключа Groq!", Color3.fromRGB(255, 80, 80)); task.wait(3); break
-                elseif err ~= "rate_limit" then
-                    onStatus("Ошибка Groq", Color3.fromRGB(255, 80, 80)); task.wait(2) end
-            end
-        end
-
-        if reply then
-            -- Проверяем не просит ли ИИ запомнить что-то
-            local memFact = reply:match("^Запомнил: (.+)")
-            if memFact then
-                addMemory(memFact)
-            end
-            table.insert(chatHistory, {role = "user", content = userMsg})
-            table.insert(chatHistory, {role = "assistant", content = reply})
-            while #chatHistory > 20 do table.remove(chatHistory, 1) end
-            onReply(reply)
-        else
-            onReply("Не удалось получить ответ. Проверь ключи в Настройках.")
-        end
-        aiWorking = false
-        -- Обрабатываем очередь античита если есть
-        if #anticheatQueue > 0 then
-            local next = table.remove(anticheatQueue, 1)
-            task.wait(0.5)
-            askAI(next.msg, next.onReply, next.onStatus)
-        end
-    end)
-end
-
--- Отдельная функция для репортов античита — не блокирует пользователя
-local function askAIAnticheat(userMsg, onReply, onStatus)
-    if aiWorking then
-        -- Добавляем в очередь, но не больше 3 штук чтобы не спамить
-        if #anticheatQueue < 3 then
-            table.insert(anticheatQueue, {msg=userMsg, onReply=onReply, onStatus=onStatus})
-        end
-        return
-    end
-    askAI(userMsg, onReply, onStatus)
-end
-
--- =============================================
--- GUI
+-- GUI MAIN
 -- =============================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Parent = game:GetService("CoreGui")
@@ -649,7 +344,7 @@ titleLabel.TextSize = 16; titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 
 local subTitle = Instance.new("TextLabel")
-subTitle.Parent = Header; subTitle.Text = "Anticheat + AI"
+subTitle.Parent = Header; subTitle.Text = "Anticheat Edition"
 subTitle.Size = UDim2.new(0, 150, 0, 14); subTitle.Position = UDim2.new(0, 40, 0, 23)
 subTitle.BackgroundTransparency = 1; subTitle.TextColor3 = Color3.fromRGB(120, 120, 150)
 subTitle.TextSize = 10; subTitle.Font = Enum.Font.Gotham
@@ -675,7 +370,7 @@ tabBar.Parent = MainFrame; tabBar.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
 tabBar.Size = UDim2.new(1, 0, 0, 30); tabBar.Position = UDim2.new(0, 0, 0, 44)
 tabBar.BorderSizePixel = 0
 
-local tabNames = {"⚡ Кик", "🚫 Бан", "🤖 ИИ", "⚙️ Настр"}
+local tabNames = {"⚡ Kick", "🚫 Ban", "📜 Logs", "⚙️ Settings"}
 local tabButtons = {}
 local tabPages = {}
 
@@ -691,11 +386,7 @@ for i, name in ipairs(tabNames) do
     tabButtons[i] = btn
 end
 
--- =============================================
--- СТРАНИЦЫ
--- =============================================
 local contentY = 78
-
 local function makePage()
     local page = Instance.new("Frame")
     page.Parent = MainFrame; page.BackgroundTransparency = 1
@@ -706,7 +397,7 @@ local function makePage()
 end
 
 -- ============================================
--- СТРАНИЦА 1: КИКЕР (логика не тронута)
+-- PAGE 1: KICKER
 -- ============================================
 local kickPage = makePage()
 
@@ -727,7 +418,7 @@ inputIcon.Parent = inputFrame; inputIcon.Text = "🔍"
 inputIcon.Size = UDim2.new(0, 28, 1, 0); inputIcon.Position = UDim2.new(0, 4, 0, 0)
 inputIcon.BackgroundTransparency = 1; inputIcon.TextSize = 13
 
-InputField.Parent = inputFrame; InputField.PlaceholderText = "Введите ник игрока..."
+InputField.Parent = inputFrame; InputField.PlaceholderText = "Enter player username..."
 InputField.PlaceholderColor3 = Color3.fromRGB(120, 120, 150)
 InputField.Size = UDim2.new(1, -36, 1, 0); InputField.Position = UDim2.new(0, 32, 0, 0)
 InputField.BackgroundTransparency = 1; InputField.TextColor3 = Color3.fromRGB(230, 230, 240)
@@ -736,18 +427,18 @@ InputField.TextXAlignment = Enum.TextXAlignment.Left; InputField.Text = ""
 InputField.ClearTextOnFocus = false
 
 StatusLabel.Parent = kickPage; StatusLabel.Size = UDim2.new(0.9, 0, 0, 18)
-StatusLabel.Position = UDim2.new(0.05, 0, 0, 48); StatusLabel.Text = "Статус: Ожидание"
+StatusLabel.Position = UDim2.new(0.05, 0, 0, 48); StatusLabel.Text = "Status: Waiting"
 StatusLabel.TextColor3 = Color3.fromRGB(120, 120, 150); StatusLabel.BackgroundTransparency = 1
 StatusLabel.TextSize = 11; StatusLabel.Font = Enum.Font.Gotham
 StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 
-StartBtn.Parent = kickPage; StartBtn.Text = "▶  ЗАПУСК"
+StartBtn.Parent = kickPage; StartBtn.Text = "▶  START"
 StartBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 60); StartBtn.Position = UDim2.new(0.05, 0, 0, 72)
 StartBtn.Size = UDim2.new(0.43, 0, 0, 38); StartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 StartBtn.TextSize = 13; StartBtn.Font = Enum.Font.GothamBold; StartBtn.BorderSizePixel = 0
 local sc = Instance.new("UICorner"); sc.CornerRadius = UDim.new(0,8); sc.Parent = StartBtn
 
-StopBtn.Parent = kickPage; StopBtn.Text = "⏹  СТОП"
+StopBtn.Parent = kickPage; StopBtn.Text = "⏹  STOP"
 StopBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40); StopBtn.Position = UDim2.new(0.52, 0, 0, 72)
 StopBtn.Size = UDim2.new(0.43, 0, 0, 38); StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 StopBtn.TextSize = 13; StopBtn.Font = Enum.Font.GothamBold; StopBtn.BorderSizePixel = 0
@@ -756,7 +447,7 @@ local stc = Instance.new("UICorner"); stc.CornerRadius = UDim.new(0,8); stc.Pare
 tabPages[1] = kickPage
 
 -- ============================================
--- СТРАНИЦА 2: BLACKLIST
+-- PAGE 2: BLACKLIST
 -- ============================================
 local blPage = makePage()
 
@@ -779,7 +470,7 @@ local blic = Instance.new("UICorner"); blic.CornerRadius = UDim.new(0,8); blic.P
 local blis = Instance.new("UIStroke"); blis.Color = Color3.fromRGB(60,60,100); blis.Thickness = 1; blis.Parent = blInputFrame
 
 local blInput = Instance.new("TextBox")
-blInput.Parent = blInputFrame; blInput.PlaceholderText = "Ник для бана..."
+blInput.Parent = blInputFrame; blInput.PlaceholderText = "Username to ban..."
 blInput.PlaceholderColor3 = Color3.fromRGB(120, 120, 150)
 blInput.Size = UDim2.new(1, -8, 1, 0); blInput.Position = UDim2.new(0, 8, 0, 0)
 blInput.BackgroundTransparency = 1; blInput.TextColor3 = Color3.fromRGB(230, 230, 240)
@@ -788,7 +479,7 @@ blInput.TextXAlignment = Enum.TextXAlignment.Left; blInput.Text = ""
 blInput.ClearTextOnFocus = false
 
 local blAddBtn = Instance.new("TextButton")
-blAddBtn.Parent = blPage; blAddBtn.Text = "+ Добавить"
+blAddBtn.Parent = blPage; blAddBtn.Text = "+ Add"
 blAddBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 220); blAddBtn.Size = UDim2.new(0.27, 0, 0, 30)
 blAddBtn.Position = UDim2.new(0.70, 0, 0, 126); blAddBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 blAddBtn.TextSize = 11; blAddBtn.Font = Enum.Font.GothamBold; blAddBtn.BorderSizePixel = 0
@@ -799,7 +490,7 @@ blStatus.Parent = blPage; blStatus.Size = UDim2.new(0.9, 0, 0, 16)
 blStatus.Position = UDim2.new(0.05, 0, 0, 162); blStatus.BackgroundTransparency = 1
 blStatus.TextColor3 = Color3.fromRGB(120, 120, 150); blStatus.TextSize = 10
 blStatus.Font = Enum.Font.Gotham; blStatus.TextXAlignment = Enum.TextXAlignment.Left
-blStatus.Text = "Загружено: " .. (function() local c=0; for _ in pairs(blacklist) do c=c+1 end; return c end)() .. " записей"
+blStatus.Text = "Loaded: " .. (function() local c=0; for _ in pairs(blacklist) do c=c+1 end; return c end)() .. " entries"
 
 tabPages[2] = blPage
 
@@ -825,7 +516,7 @@ local function addBlEntry(name)
     delBtn.MouseButton1Click:Connect(function()
         blacklist[name:lower()] = nil; saveBlacklist(); row:Destroy()
         task.wait(); blScroll.CanvasSize = UDim2.new(0, 0, 0, blLayout.AbsoluteContentSize.Y + 8)
-        blStatus.Text = "Удалено: " .. name
+        blStatus.Text = "Removed: " .. name
     end)
     blScroll.CanvasSize = UDim2.new(0, 0, 0, blLayout.AbsoluteContentSize.Y + 8)
 end
@@ -834,63 +525,46 @@ for name in pairs(blacklist) do addBlEntry(name) end
 
 blAddBtn.MouseButton1Click:Connect(function()
     local name = blInput.Text:gsub("%s", "")
-    if name == "" then blStatus.Text = "Введите ник!"; return end
-    if blacklist[name:lower()] then blStatus.Text = "Уже в списке!"; return end
+    if name == "" then blStatus.Text = "Enter username!"; return end
+    if blacklist[name:lower()] then blStatus.Text = "Already in list!"; return end
     blacklist[name:lower()] = true; saveBlacklist(); addBlEntry(name)
-    blStatus.Text = "OK: " .. name .. " добавлен"; blInput.Text = ""
+    blStatus.Text = "OK: " .. name .. " added"; blInput.Text = ""
 end)
 
 -- ============================================
--- СТРАНИЦА 3: AI CHAT
+-- PAGE 3: LOGS (Replaced AI page)
 -- ============================================
-local aiPage = makePage()
+local logsPage = makePage()
 
-local aiProviderLabel = Instance.new("TextLabel")
-aiProviderLabel.Parent = aiPage; aiProviderLabel.Size = UDim2.new(0.9, 0, 0, 16)
-aiProviderLabel.Position = UDim2.new(0.05, 0, 0, 4); aiProviderLabel.BackgroundTransparency = 1
-aiProviderLabel.TextColor3 = Color3.fromRGB(0, 200, 100); aiProviderLabel.TextSize = 10
-aiProviderLabel.Font = Enum.Font.GothamBold; aiProviderLabel.TextXAlignment = Enum.TextXAlignment.Left
-aiProviderLabel.Text = "Провайдер: Gemini (основной)"
+local logChatBox = Instance.new("ScrollingFrame")
+logChatBox.Parent = logsPage; logChatBox.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
+logChatBox.Size = UDim2.new(0.9, 0, 1, -20); logChatBox.Position = UDim2.new(0.05, 0, 0, 10)
+logChatBox.BorderSizePixel = 0; logChatBox.ScrollBarThickness = 3
+logChatBox.ScrollBarImageColor3 = Color3.fromRGB(150, 0, 255)
+logChatBox.ScrollingDirection = Enum.ScrollingDirection.Y
+local lcc = Instance.new("UICorner"); lcc.CornerRadius = UDim.new(0,8); lcc.Parent = logChatBox
 
-aiStatusLabel = aiProviderLabel
-
-local aiChatBox = Instance.new("ScrollingFrame")
-aiChatBox.Parent = aiPage; aiChatBox.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-aiChatBox.Size = UDim2.new(0.9, 0, 0, 130); aiChatBox.Position = UDim2.new(0.05, 0, 0, 22)
-aiChatBox.BorderSizePixel = 0; aiChatBox.ScrollBarThickness = 3
-aiChatBox.ScrollBarImageColor3 = Color3.fromRGB(150, 0, 255)
-aiChatBox.ScrollingDirection = Enum.ScrollingDirection.Y
-local aicc = Instance.new("UICorner"); aicc.CornerRadius = UDim.new(0,8); aicc.Parent = aiChatBox
-
-local aiLayout = Instance.new("UIListLayout")
-aiLayout.Parent = aiChatBox; aiLayout.Padding = UDim.new(0, 4)
-aiLayout.SortOrder = Enum.SortOrder.LayoutOrder
-local aiPad = Instance.new("UIPadding"); aiPad.Parent = aiChatBox
-aiPad.PaddingLeft = UDim.new(0, 6); aiPad.PaddingRight = UDim.new(0, 6)
-aiPad.PaddingTop = UDim.new(0, 4); aiPad.PaddingBottom = UDim.new(0, 4)
+local logLayout = Instance.new("UIListLayout")
+logLayout.Parent = logChatBox; logLayout.Padding = UDim.new(0, 4)
+logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+local logPad = Instance.new("UIPadding"); logPad.Parent = logChatBox
+logPad.PaddingLeft = UDim.new(0, 6); logPad.PaddingRight = UDim.new(0, 6)
+logPad.PaddingTop = UDim.new(0, 4); logPad.PaddingBottom = UDim.new(0, 4)
 
 local function scrollToBottom()
     task.wait()
-    aiChatBox.CanvasSize = UDim2.new(0, 0, 0, aiLayout.AbsoluteContentSize.Y + 10)
-    aiChatBox.CanvasPosition = Vector2.new(0, math.max(0, aiLayout.AbsoluteContentSize.Y - aiChatBox.AbsoluteSize.Y + 10))
+    logChatBox.CanvasSize = UDim2.new(0, 0, 0, logLayout.AbsoluteContentSize.Y + 10)
+    logChatBox.CanvasPosition = Vector2.new(0, math.max(0, logLayout.AbsoluteContentSize.Y - logChatBox.AbsoluteSize.Y + 10))
 end
 
-local switchTab  -- forward declaration
+local switchTab
 
-local function addChatMsg(text, isAi, isAlert, kickNick)
-    local color
-    if isAlert then
-        color = Color3.fromRGB(255, 100, 80)
-    elseif isAi then
-        color = Color3.fromRGB(140, 100, 255)
-    else
-        color = Color3.fromRGB(200, 200, 220)
-    end
-    local prefix = isAlert and "[!] " or (isAi and "[ИИ] " or "[Ты] ")
+local function addLogMsg(text, isAlert, kickNick)
+    local color = isAlert and Color3.fromRGB(255, 100, 80) or Color3.fromRGB(200, 200, 220)
+    local prefix = isAlert and "[!] " or "[SYSTEM] "
 
-    -- Контейнер строки
     local row = Instance.new("Frame")
-    row.Parent = aiChatBox
+    row.Parent = logChatBox
     row.BackgroundTransparency = 1
     row.Size = UDim2.new(1, 0, 0, 0)
     row.AutomaticSize = Enum.AutomaticSize.Y
@@ -903,14 +577,13 @@ local function addChatMsg(text, isAi, isAlert, kickNick)
     lbl.TextSize = 11; lbl.Font = Enum.Font.Gotham
     lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.TextWrapped = true
 
-    -- Если это алерт с ником — добавляем кнопку "-> Кик"
     if isAlert and kickNick then
         lbl.Size = UDim2.new(1, -52, 0, 0)
         lbl.AutomaticSize = Enum.AutomaticSize.Y
 
         local kickBtn = Instance.new("TextButton")
         kickBtn.Parent = row
-        kickBtn.Text = "-> Кик"
+        kickBtn.Text = "-> Kick"
         kickBtn.Size = UDim2.new(0, 46, 0, 20)
         kickBtn.Position = UDim2.new(1, -50, 0, 1)
         kickBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
@@ -922,7 +595,7 @@ local function addChatMsg(text, isAi, isAlert, kickNick)
 
         kickBtn.MouseButton1Click:Connect(function()
             InputField.Text = kickNick
-            switchTab(1)  -- переходим на вкладку кикера
+            switchTab(1)
         end)
     else
         lbl.Size = UDim2.new(1, 0, 0, 0)
@@ -932,75 +605,17 @@ local function addChatMsg(text, isAi, isAlert, kickNick)
     task.defer(scrollToBottom)
 end
 
--- Сохраняем функцию глобально для античита
-addChatMsgGlobal = addChatMsg
+addLogMsgGlobal = addLogMsg
+addLogMsg("Online. Anticheat is active. Logs will appear here.", false)
 
-addChatMsg("Онлайн. Настрой ключи в Настройках. Античит активен.", true)
-
--- Ввод
-local aiInputFrame = Instance.new("Frame")
-aiInputFrame.Parent = aiPage; aiInputFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-aiInputFrame.Size = UDim2.new(0.68, 0, 0, 28); aiInputFrame.Position = UDim2.new(0.05, 0, 1, -34)
-aiInputFrame.BorderSizePixel = 0
-local aiic = Instance.new("UICorner"); aiic.CornerRadius = UDim.new(0,8); aiic.Parent = aiInputFrame
-local aiis = Instance.new("UIStroke"); aiis.Color = Color3.fromRGB(80,40,120); aiis.Thickness = 1; aiis.Parent = aiInputFrame
-
-local aiInput = Instance.new("TextBox")
-aiInput.Parent = aiInputFrame; aiInput.PlaceholderText = "Сообщение..."
-aiInput.PlaceholderColor3 = Color3.fromRGB(120, 120, 150)
-aiInput.Size = UDim2.new(1, -8, 1, 0); aiInput.Position = UDim2.new(0, 8, 0, 0)
-aiInput.BackgroundTransparency = 1; aiInput.TextColor3 = Color3.fromRGB(230, 230, 240)
-aiInput.TextSize = 12; aiInput.Font = Enum.Font.Gotham
-aiInput.TextXAlignment = Enum.TextXAlignment.Left; aiInput.Text = ""
-aiInput.ClearTextOnFocus = false
-
-local aiSendBtn = Instance.new("TextButton")
-aiSendBtn.Parent = aiPage; aiSendBtn.Text = "Отправить"
-aiSendBtn.BackgroundColor3 = Color3.fromRGB(100, 40, 200); aiSendBtn.Size = UDim2.new(0.22, 0, 0, 28)
-aiSendBtn.Position = UDim2.new(0.75, 0, 1, -34); aiSendBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-aiSendBtn.TextSize = 10; aiSendBtn.Font = Enum.Font.GothamBold; aiSendBtn.BorderSizePixel = 0
-local aisbc = Instance.new("UICorner"); aisbc.CornerRadius = UDim.new(0,8); aisbc.Parent = aiSendBtn
-
-local function getPlayersContext()
-    if #playersSnapshot == 0 then return "" end
-    return "\n[Игроки онлайн: " .. table.concat(playersSnapshot, " | ") .. "]"
-end
-
-local function sendMessage()
-    if aiWorking then return end
-    local msg = aiInput.Text:match("^%s*(.-)%s*$")
-    if msg == "" then return end
-    addChatMsg(msg, false)
-    aiInput.Text = ""
-    -- Прикрепляем актуальный список игроков прямо к запросу
-    local msgWithContext = msg .. getPlayersContext()
-    askAI(msgWithContext,
-        function(reply)
-            if currentProvider == "gemini" then
-                aiProviderLabel.Text = "Провайдер: Gemini (основной)"
-                aiProviderLabel.TextColor3 = Color3.fromRGB(0, 200, 100)
-            else
-                aiProviderLabel.Text = "Провайдер: Groq (резервный)"
-                aiProviderLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
-            end
-            addChatMsg(reply, true)
-        end,
-        function(statusText, color)
-            aiProviderLabel.Text = statusText
-            aiProviderLabel.TextColor3 = color or Color3.fromRGB(255, 180, 0)
-        end
-    )
-end
-
-aiSendBtn.MouseButton1Click:Connect(sendMessage)
-tabPages[3] = aiPage
+tabPages[3] = logsPage
 
 -- ============================================
--- СТРАНИЦА 4: НАСТРОЙКИ
+-- PAGE 4: SETTINGS (Dynamic Speedhack configuration)
 -- ============================================
 local settingsPage = makePage()
 
-local function makeKeyField(parent, labelText, yPos, currentVal, onSave)
+local function makeNumberField(parent, labelText, yPos, settingKey, onSave)
     local lbl = Instance.new("TextLabel")
     lbl.Parent = parent; lbl.Text = labelText
     lbl.Size = UDim2.new(0.9, 0, 0, 14); lbl.Position = UDim2.new(0.05, 0, 0, yPos)
@@ -1015,81 +630,36 @@ local function makeKeyField(parent, labelText, yPos, currentVal, onSave)
     local fs = Instance.new("UIStroke"); fs.Color = Color3.fromRGB(60,60,100); fs.Thickness = 1; fs.Parent = frame
 
     local tb = Instance.new("TextBox")
-    tb.Parent = frame; tb.Text = currentVal
-    tb.PlaceholderText = "Вставь ключ API..."
+    tb.Parent = frame; tb.Text = tostring(settings[settingKey])
     tb.PlaceholderColor3 = Color3.fromRGB(90, 90, 120)
     tb.Size = UDim2.new(1, -10, 1, 0); tb.Position = UDim2.new(0, 8, 0, 0)
     tb.BackgroundTransparency = 1; tb.TextColor3 = Color3.fromRGB(200, 200, 230)
-    tb.TextSize = 10; tb.Font = Enum.Font.Gotham
+    tb.TextSize = 11; tb.Font = Enum.Font.Gotham
     tb.TextXAlignment = Enum.TextXAlignment.Left; tb.ClearTextOnFocus = false
-    tb.FocusLost:Connect(function() onSave(tb.Text) end)
+    
+    tb.FocusLost:Connect(function()
+        local val = tonumber(tb.Text)
+        if val then
+            onSave(val)
+            tb.Text = tostring(val)
+        else
+            tb.Text = tostring(settings[settingKey])
+        end
+    end)
     return tb
 end
 
-makeKeyField(settingsPage, "Gemini API Key (основной)", 6, settings.geminiKey, function(v)
-    settings.geminiKey = v; saveSettings()
+makeNumberField(settingsPage, "Walk Max Speed (Sustained)", 6, "walkMax", function(v)
+    settings.walkMax = v; saveSettings()
 end)
-makeKeyField(settingsPage, "Groq API Key (резервный)", 58, settings.groqKey, function(v)
-    settings.groqKey = v; saveSettings()
+makeNumberField(settingsPage, "Sprint Max Speed (Instant)", 58, "sprintMax", function(v)
+    settings.sprintMax = v; saveSettings()
 end)
-
--- Кнопка очистки памяти ИИ
-local clearMemBtn = Instance.new("TextButton")
-clearMemBtn.Parent = settingsPage; clearMemBtn.Text = "Очистить память ИИ (" .. #aiMemory .. " фактов)"
-clearMemBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-clearMemBtn.Size = UDim2.new(0.9, 0, 0, 26); clearMemBtn.Position = UDim2.new(0.05, 0, 0, 112)
-clearMemBtn.TextColor3 = Color3.fromRGB(255, 255, 255); clearMemBtn.TextSize = 10
-clearMemBtn.Font = Enum.Font.GothamBold; clearMemBtn.BorderSizePixel = 0
-local cmbc = Instance.new("UICorner"); cmbc.CornerRadius = UDim.new(0,7); cmbc.Parent = clearMemBtn
-
-clearMemBtn.MouseButton1Click:Connect(function()
-    aiMemory = {}; saveMemory()
-    clearMemBtn.Text = "Очистить память ИИ (0 фактов)"
-    addChatMsg("Память очищена.", true)
+makeNumberField(settingsPage, "Sustained Duration (Seconds)", 110, "sprintTime", function(v)
+    settings.sprintTime = v; saveSettings()
 end)
-
-local provInfo = Instance.new("TextLabel")
-provInfo.Parent = settingsPage; provInfo.Size = UDim2.new(0.9, 0, 0, 50)
-provInfo.Position = UDim2.new(0.05, 0, 0, 146); provInfo.BackgroundTransparency = 1
-provInfo.TextColor3 = Color3.fromRGB(90, 90, 120); provInfo.TextSize = 9
-provInfo.Font = Enum.Font.Gotham; provInfo.TextXAlignment = Enum.TextXAlignment.Left
-provInfo.TextWrapped = true
-provInfo.Text = "Gemini 3.1 Flash-Lite — основной\nGroq GPT-OSS 120B — резервный (6000 т/мин)\nПамять ИИ сохраняется в security_ai_memory.json"
 
 tabPages[4] = settingsPage
-
--- ============================================
--- СТРАНИЦА 4: РАУНД
--- ============================================
-local roundPage = makePage()
-
--- Счётчик сверху
-local roundCountLabel = Instance.new("TextLabel", roundPage)
-roundCountLabel.Size = UDim2.new(0.9, 0, 0, 22)
-roundCountLabel.Position = UDim2.new(0.05, 0, 0, 6)
-roundCountLabel.BackgroundTransparency = 1
-roundCountLabel.TextColor3 = Color3.fromRGB(200, 200, 240)
-roundCountLabel.TextSize = 11
-roundCountLabel.Font = Enum.Font.GothamBold
-roundCountLabel.TextXAlignment = Enum.TextXAlignment.Left
-roundCountLabel.Text = "Выживших: — | Заражённых: — | Мёртвых: —"
-
--- Список игроков
-local roundScroll = Instance.new("ScrollingFrame", roundPage)
-roundScroll.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-roundScroll.Size = UDim2.new(0.9, 0, 1, -36)
-roundScroll.Position = UDim2.new(0.05, 0, 0, 30)
-roundScroll.BorderSizePixel = 0
-roundScroll.ScrollBarThickness = 3
-roundScroll.ScrollBarImageColor3 = Color3.fromRGB(0, 150, 255)
-roundScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Instance.new("UICorner", roundScroll).CornerRadius = UDim.new(0, 8)
-local roundLayout = Instance.new("UIListLayout", roundScroll)
-roundLayout.Padding = UDim.new(0, 3)
-roundLayout.SortOrder = Enum.SortOrder.LayoutOrder
-local roundPad = Instance.new("UIPadding", roundScroll)
-roundPad.PaddingLeft = UDim.new(0, 5)
-roundPad.PaddingTop = UDim.new(0, 4)
 
 -- =============================================
 -- TAB SWITCHING
@@ -1113,7 +683,7 @@ end
 switchTab(1)
 
 -- =============================================
--- HOVER
+-- HOVER EFFECTS
 -- =============================================
 local function addHover(btn)
     local origColor = btn.BackgroundColor3
@@ -1131,7 +701,7 @@ local function addHover(btn)
     end)
 end
 
-addHover(StartBtn); addHover(StopBtn); addHover(blAddBtn); addHover(aiSendBtn)
+addHover(StartBtn); addHover(StopBtn); addHover(blAddBtn)
 
 MainFrame.BackgroundTransparency = 1
 task.defer(function()
@@ -1141,12 +711,10 @@ task.defer(function()
 end)
 
 -- =============================================
--- КНОПКА СВЕРНУТЬ + ПЛАВАЮЩИЙ ШАР
+-- MINIMIZE BUTTON & FLOATING BUBBLE
 -- =============================================
-
--- Загружаем сохранённую позицию шара
 local BUBBLE_POS_FILE = "security_bubble_pos.json"
-local bubblePosX, bubblePosY = 0.9, 0.85  -- дефолт: правый нижний угол
+local bubblePosX, bubblePosY = 0.9, 0.85
 
 pcall(function()
     if isfile(BUBBLE_POS_FILE) then
@@ -1156,7 +724,6 @@ pcall(function()
     end
 end)
 
--- Шар (появляется когда свёрнуто)
 local BubbleBtn = Instance.new("TextButton", ScreenGui)
 BubbleBtn.Size             = UDim2.new(0, 54, 0, 54)
 BubbleBtn.Position         = UDim2.new(bubblePosX, -27, bubblePosY, -27)
@@ -1172,7 +739,6 @@ local bubbleStroke = Instance.new("UIStroke", BubbleBtn)
 bubbleStroke.Color     = Color3.fromRGB(0, 150, 255)
 bubbleStroke.Thickness = 2
 
--- Кнопка свернуть в хедере
 local minimizeBtn = Instance.new("TextButton", Header)
 minimizeBtn.Text             = "—"
 minimizeBtn.Size             = UDim2.new(0, 22, 0, 22)
@@ -1194,7 +760,6 @@ local function setMinimized(val)
 end
 
 minimizeBtn.MouseButton1Click:Connect(function()
-    -- Позиционируем шар рядом с кнопкой свернуть
     local minBtnPos = minimizeBtn.AbsolutePosition
     local vp = workspace.CurrentCamera.ViewportSize
     bubblePosX = math.clamp((minBtnPos.X + 11) / vp.X, 0.05, 0.95)
@@ -1206,12 +771,10 @@ minimizeBtn.MouseButton1Click:Connect(function()
     setMinimized(true)
 end)
 
--- Разворачиваем по клику на шар
 BubbleBtn.MouseButton1Click:Connect(function()
     setMinimized(false)
 end)
 
--- Перетаскивание шара
 local draggingBubble = false
 local dragStartMouse = nil
 local dragStartPos   = nil
@@ -1245,7 +808,6 @@ game:GetService("UserInputService").InputEnded:Connect(function(inp)
     or inp.UserInputType == Enum.UserInputType.Touch then
         if draggingBubble then
             draggingBubble = false
-            -- Сохраняем позицию
             pcall(function()
                 writefile(BUBBLE_POS_FILE, HttpService:JSONEncode({x=bubblePosX, y=bubblePosY}))
             end)
@@ -1254,21 +816,19 @@ game:GetService("UserInputService").InputEnded:Connect(function(inp)
 end)
 
 -- =============================================
--- CALLBACK античита: буферизация → одно сообщение на игрока
+-- ANTICHEAT DETECT FLUSH
 -- =============================================
-local detectBuffer = {}  -- detectBuffer[userId] = {cheats = {}, timer = nil}
+local detectBuffer = {}
 
 local function flushDetect(player)
     local uid = player.UserId
     local buf = detectBuffer[uid]
     if not buf or #buf.cheats == 0 then return end
 
-    -- DisplayName и username
     local displayName = player.DisplayName or player.Name
     local userName = player.Name
     local fullName = displayName .. " (@" .. userName .. ")"
 
-    -- Собираем все типы читов в одну строку
     local cheatTypes = {}
     local details = {}
     local speedVal = nil
@@ -1280,29 +840,8 @@ local function flushDetect(player)
     local typesStr = table.concat(cheatTypes, " + ")
     local detailsStr = table.concat(details, "; ")
 
-    -- Системный алерт — один (показываем displayName + @username)
-    local alertText = "Детект [" .. typesStr .. "]: " .. fullName
-    if speedVal then alertText = alertText .. " | скорость " .. speedVal end
-    addChatMsgGlobal(alertText, false, true, userName)
-
-    -- Память
-    local memFact = os.date("%H:%M") .. " — " .. fullName .. " пойман (" .. detailsStr .. ")"
-    addMemory(memFact)
-
-    -- Промпт с чётким форматом: DisplayName (@username)
-    local prompt = "Сообщи о читере. Игрок: " .. fullName .. ". Нарушения: " .. detailsStr
-        .. ". ФОРМАТ СТРОГО: player (" .. fullName .. ") [" .. typesStr .. "] — причина одним предложением."
-    askAIAnticheat(prompt,
-        function(reply)
-            aiProviderLabel.Text = currentProvider == "gemini" and "Провайдер: Gemini" or "Провайдер: Groq"
-            addChatMsgGlobal(reply, true)
-            clearMemBtn.Text = "Очистить память ИИ (" .. #aiMemory .. " фактов)"
-        end,
-        function(statusText, color)
-            aiProviderLabel.Text = statusText
-            aiProviderLabel.TextColor3 = color
-        end
-    )
+    local alertText = "DETECT [" .. typesStr .. "]: " .. fullName .. " | Reason: " .. detailsStr
+    addLogMsgGlobal(alertText, true, userName)
 
     detectBuffer[uid] = nil
 end
@@ -1311,19 +850,20 @@ onCheatDetected = function(player, speed, reason)
     local speedRounded = speed > 0 and math.floor(speed * 10) / 10 or nil
     local reasonText = ""
     local cheatType = ""
+
     if reason == "SPEED_OVER_MAX" then
-        reasonText = "скорость " .. speedRounded .. " (выше максимума 21.5)"
-        cheatType = "СПИДХАК"
+        reasonText = "speed " .. speedRounded .. " (above max " .. settings.sprintMax .. ")"
+        cheatType = "SPEEDHACK"
     elseif reason == "SPEED_SUSTAINED" then
-        reasonText = "скорость " .. speedRounded .. " держится более 5 сек"
-        cheatType = "СПИДХАК"
+        reasonText = "speed " .. speedRounded .. " sustained for " .. settings.sprintTime .. "+ sec"
+        cheatType = "SPEEDHACK"
     elseif reason == "FLY1" then
-        reasonText = "в состоянии Freefall/Jump более 4 сек (флай)"
-        cheatType = "ФЛАЙ"
+        reasonText = "Freefall/Jump state over 4 sec"
+        cheatType = "FLYHACK"
         speedRounded = nil
     elseif reason == "FLY2" then
-        reasonText = "персонаж наклонён более 4 сек (флай)"
-        cheatType = "ФЛАЙ"
+        reasonText = "body tilted over 4 sec"
+        cheatType = "FLYHACK"
         speedRounded = nil
     end
 
@@ -1331,7 +871,7 @@ onCheatDetected = function(player, speed, reason)
     if not detectBuffer[uid] then
         detectBuffer[uid] = {cheats = {}}
     end
-    -- Добавляем в буфер только уникальный тип
+    
     local alreadyHas = false
     for _, c in ipairs(detectBuffer[uid].cheats) do
         if c.cheatType == cheatType then alreadyHas = true; break end
@@ -1344,7 +884,6 @@ onCheatDetected = function(player, speed, reason)
         })
     end
 
-    -- Сбрасываем таймер — ждём 1 сек чтобы собрать все детекты на игрока
     if detectBuffer[uid].thread then
         task.cancel(detectBuffer[uid].thread)
     end
@@ -1353,10 +892,8 @@ onCheatDetected = function(player, speed, reason)
     end)
 end
 
-
-
 -- =============================================
--- ОРИГИНАЛЬНАЯ ЛОГИКА КИКА (НЕ ТРОНУТА)
+-- KICKING LOGIC (Maintained)
 -- =============================================
 local active = false
 local lastKickOpen = 0
@@ -1374,7 +911,7 @@ task.spawn(function()
         if active then
             local target = InputField.Text:lower()
             if target == "" then
-                StatusLabel.Text = "Ошибка: Введите ник!"
+                StatusLabel.Text = "Error: Enter username!"
                 task.wait(0.5)
             else
                 local targetFound = false
@@ -1385,7 +922,7 @@ task.spawn(function()
                         local textMatch = false
                         if obj:IsA("TextButton") then textMatch = obj.Text:lower():find(target) end
                         if nameMatch or textMatch then
-                            fastClick(obj); StatusLabel.Text = "КЛИК ПО НИКУ!"
+                            fastClick(obj); StatusLabel.Text = "CLICKED USERNAME!"
                             targetFound = true; task.wait(0.5); break
                         end
                     end
@@ -1395,14 +932,14 @@ task.spawn(function()
                         for _, obj in ipairs(game:GetDescendants()) do
                             if obj.Name == "Kick" and obj:IsA("GuiButton") then
                                 fastClick(obj); lastKickOpen = tick()
-                                StatusLabel.Text = "Открываем меню..."; break
+                                StatusLabel.Text = "Opening menu..."; break
                             end
                         end
                     end
                 end
             end
         else
-            StatusLabel.Text = "Статус: Остановлен"
+            StatusLabel.Text = "Status: Stopped"
         end
         task.wait(0.1)
     end
@@ -1411,11 +948,11 @@ end)
 StartBtn.MouseButton1Click:Connect(function()
     active = true; statusDot.BackgroundColor3 = Color3.fromRGB(0, 200, 80)
     statusMini.Text = "ON"; statusMini.TextColor3 = Color3.fromRGB(0, 200, 80)
-    print("--- ЗАПУЩЕНО ---")
+    print("--- STARTED ---")
 end)
 
 StopBtn.MouseButton1Click:Connect(function()
     active = false; statusDot.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
     statusMini.Text = "OFF"; statusMini.TextColor3 = Color3.fromRGB(220, 50, 50)
-    print("--- ОСТАНОВЛЕНО ---")
+    print("--- STOPPED ---")
 end)
