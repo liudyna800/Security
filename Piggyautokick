@@ -363,7 +363,7 @@ statusMini.BackgroundTransparency = 1; statusMini.TextColor3 = Color3.fromRGB(22
 statusMini.TextSize = 10; statusMini.Font = Enum.Font.GothamBold
 
 -- =============================================
--- TAB BAR
+-- TAB BAR & HELPER FUNCTIONS
 -- =============================================
 local tabBar = Instance.new("Frame")
 tabBar.Parent = MainFrame; tabBar.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
@@ -394,6 +394,26 @@ local function makePage()
     page.Position = UDim2.new(0, 0, 0, contentY)
     page.BorderSizePixel = 0; page.Visible = false
     return page
+end
+
+local function createNote(parent, yPos, text)
+    local note = Instance.new("TextLabel")
+    note.Parent = parent
+    note.Size = UDim2.new(0.9, 0, 0, 35)
+    if typeof(yPos) == "UDim2" then
+        note.Position = yPos
+    else
+        note.Position = UDim2.new(0.05, 0, 0, yPos)
+    end
+    note.BackgroundTransparency = 1
+    note.TextColor3 = Color3.fromRGB(100, 100, 130)
+    note.TextSize = 10
+    note.Font = Enum.Font.Gotham
+    note.TextXAlignment = Enum.TextXAlignment.Left
+    note.TextYAlignment = Enum.TextYAlignment.Top
+    note.TextWrapped = true
+    note.Text = "Note: " .. text
+    return note
 end
 
 -- ============================================
@@ -444,6 +464,8 @@ StopBtn.Size = UDim2.new(0.43, 0, 0, 38); StopBtn.TextColor3 = Color3.fromRGB(25
 StopBtn.TextSize = 13; StopBtn.Font = Enum.Font.GothamBold; StopBtn.BorderSizePixel = 0
 local stc = Instance.new("UICorner"); stc.CornerRadius = UDim.new(0,8); stc.Parent = StopBtn
 
+createNote(kickPage, 125, "Auto-clicks the game's native kick GUI. Enter a username and press START to continuously target the player.")
+
 tabPages[1] = kickPage
 
 -- ============================================
@@ -492,6 +514,8 @@ blStatus.TextColor3 = Color3.fromRGB(120, 120, 150); blStatus.TextSize = 10
 blStatus.Font = Enum.Font.Gotham; blStatus.TextXAlignment = Enum.TextXAlignment.Left
 blStatus.Text = "Loaded: " .. (function() local c=0; for _ in pairs(blacklist) do c=c+1 end; return c end)() .. " entries"
 
+createNote(blPage, 182, "Players added to this list will be continuously auto-kicked upon detection. Saves across sessions.")
+
 tabPages[2] = blPage
 
 local function addBlEntry(name)
@@ -532,13 +556,13 @@ blAddBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================
--- PAGE 3: LOGS (Replaced AI page)
+-- PAGE 3: LOGS
 -- ============================================
 local logsPage = makePage()
 
 local logChatBox = Instance.new("ScrollingFrame")
 logChatBox.Parent = logsPage; logChatBox.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-logChatBox.Size = UDim2.new(0.9, 0, 1, -20); logChatBox.Position = UDim2.new(0.05, 0, 0, 10)
+logChatBox.Size = UDim2.new(0.9, 0, 1, -45); logChatBox.Position = UDim2.new(0.05, 0, 0, 10)
 logChatBox.BorderSizePixel = 0; logChatBox.ScrollBarThickness = 3
 logChatBox.ScrollBarImageColor3 = Color3.fromRGB(150, 0, 255)
 logChatBox.ScrollingDirection = Enum.ScrollingDirection.Y
@@ -608,10 +632,12 @@ end
 addLogMsgGlobal = addLogMsg
 addLogMsg("Online. Anticheat is active. Logs will appear here.", false)
 
+createNote(logsPage, UDim2.new(0.05, 0, 1, -30), "Monitor live anticheat events here. Click '-> Kick' to quickly target flagged players.")
+
 tabPages[3] = logsPage
 
 -- ============================================
--- PAGE 4: SETTINGS (Dynamic Speedhack configuration)
+-- PAGE 4: SETTINGS
 -- ============================================
 local settingsPage = makePage()
 
@@ -658,6 +684,8 @@ end)
 makeNumberField(settingsPage, "Sustained Duration (Seconds)", 110, "sprintTime", function(v)
     settings.sprintTime = v; saveSettings()
 end)
+
+createNote(settingsPage, 162, "These parameters adjust speedhack detection for your specific game. Do not change the speeds unnecessarily to avoid false positives.")
 
 tabPages[4] = settingsPage
 
@@ -840,7 +868,7 @@ local function flushDetect(player)
     local typesStr = table.concat(cheatTypes, " + ")
     local detailsStr = table.concat(details, "; ")
 
-    local alertText = "DETECT [" .. typesStr .. "]: " .. fullName .. " | Reason: " .. detailsStr
+    local alertText = "DETECT[" .. typesStr .. "]: " .. fullName .. " | Reason: " .. detailsStr
     addLogMsgGlobal(alertText, true, userName)
 
     detectBuffer[uid] = nil
@@ -893,7 +921,7 @@ onCheatDetected = function(player, speed, reason)
 end
 
 -- =============================================
--- KICKING LOGIC (Maintained)
+-- KICKING LOGIC
 -- =============================================
 local active = false
 local lastKickOpen = 0
