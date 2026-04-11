@@ -133,7 +133,6 @@ end)
 local WALK_MAX = 15.5        -- буфер: 15.5 и ниже норма (ходьба=15, флуктуации до 15.5 ок)
 local SPRINT_MAX = 21.5      -- буфер: выше 21.5 = сразу чит (21 это норм бег)
 local SPRINT_CHEAT_TIME = 5  -- секунд непрерывного спринта = чит
-local FLY_CHEAT_TIME = 5      -- секунд в воздухе = флай (анимации зацепления < 2 сек)
 
 -- =============================================
 -- СБРОС при респавне (grace 4 сек на приземление)
@@ -142,18 +141,22 @@ local playerWatch = {}  -- [userId] = {...}
 
 local function resetWatch(uid)
     playerWatch[uid] = {
-        sprintStart   = nil,
-        airStart      = nil,
-        flyLastY      = nil,
-        flyCheckY     = nil,
-        flyCheckTick  = nil,
-        flagged       = false,
-        flaggedFly    = false,
-        flagCount     = 0,
-        hasLanded     = false,  -- флай детект включается только после первого касания земли
-        spawnTime     = tick(), -- время спавна для доп. защиты
+        sprintStart = nil,
+        flagged     = false,
+        flagCount   = 0,
+        -- Флай тип 1: долгий Freefall/Jump
+        flyStart    = nil,   -- когда начался Freefall/Jump
+        flaggedFly1 = false,
+        -- Флай тип 2: наклон персонажа
+        tiltStart   = nil,   -- когда начался наклон
+        flaggedFly2 = false,
+        _char       = nil,
     }
 end
+
+local FLY1_TIME = 4  -- сек в Freefall/Jump = чит
+local FLY2_TIME = 4  -- сек под наклоном = чит
+local TILT_THRESHOLD = 0.7  -- UpVector.Y < 0.7 = наклон (норма = 1.0)
 
 Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
@@ -171,13 +174,6 @@ for _, player in ipairs(Players:GetPlayers()) do
 end
 
 
--- playerWatch[userId] = {
---   sprintStart   = tick() или nil,  -- таймер спринта
---   airStart      = tick() или nil,  -- таймер нахождения в воздухе (флай)
---   flagged       = false,
---   flaggedFly    = false,
---   flagCount     = 0,
--- }
 
 local addChatMsgGlobal = nil  -- будет задан после GUI
 local onCheatDetected = nil   -- callback
@@ -224,7 +220,7 @@ task.spawn(function()
 
             local pw = playerWatch[uid]
 
-            if pw.flagged and pw.flaggedFly then continue end
+            if pw.flagged then continue end
 
             local speed = getHorizontalSpeed(player)
             local state = getHumanoidState(player)
@@ -234,87 +230,56 @@ task.spawn(function()
             local isFreefall = state == Enum.HumanoidStateType.Freefall
             local isNormalAir = isJumping or isFreefall  -- обычный прыжок/падение
 
-            -- === ФЛАЙ ДЕТЕКТ ===
-            -- Активируется только после первого шага игрока
-            -- Это исключает ложные срабатывания при спавне (провал сквозь блоки)
-            if not pw.flaggedFly then
-                local char_ = player.Character
-                local hrp_ = char_ and char_:FindFirstChild("HumanoidRootPart")
-                local hum_ = char_ and char_:FindFirstChildOfClass("Humanoid")
-                if hrp_ and hum_ then
-                    local yVel     = hrp_.Velocity.Y
-                    local yPos     = hrp_.Position.Y
-                    local hSpd     = math.sqrt(hrp_.Velocity.X^2 + hrp_.Velocity.Z^2)
-                    local onGround = hum_.FloorMaterial ~= Enum.Material.Air
-
-                    -- Флай детект: только после первого касания земли
-                    -- Это исключает T-позу при спавне и провал сквозь блоки
-                    do
-                        -- Фиксируем первое приземление
-                        if onGround and not pw.hasLanded then
-                            pw.hasLanded = true
+            -- === ФЛАЙ ДЕТЕКТ ТИП 1: долгий Freefall/Jump ===
+            if not pw.flaggedFly1 then
+                local isAir = state == Enum.HumanoidStateType.Freefall
+                           or state == Enum.HumanoidStateType.Jumping
+                if isAir then
+                    if pw.flyStart == nil then
+                        pw.flyStart = tick()
+                    elseif tick() - pw.flyStart >= FLY1_TIME then
+                        pw.flaggedFly1 = true
+                        if onCheatDetected then
+                            onCheatDetected(player, speed, "FLY1")
                         end
-
-                        if not onGround and pw.hasLanded then
-                            if pw.airStart == nil then
-                                pw.airStart  = tick()
-                                pw.flyLastY  = yPos
-                                pw.flyCheckY = yPos
-                            else
-                                local elapsed = tick() - pw.airStart
-
-                                -- Каждую секунду замеряем скорость падения Y
-                                if not pw.flyCheckTick then pw.flyCheckTick = tick() end
-                                local dtCheck = tick() - pw.flyCheckTick
-                                if dtCheck >= 1.0 then
-                                    local dyPerSec = math.abs(yPos - pw.flyCheckY) / dtCheck
-                                    -- При нормальном падении dyPerSec > 8 (гравитация ~196 studs/s^2)
-                                    -- При флае dyPerSec < 3
-                                    if dyPerSec > 3 then
-                                        -- Y активно меняется (падение или анимация) — сбрасываем таймер
-                                        pw.airStart   = nil
-                                        pw.flyLastY   = nil
-                                        pw.flyCheckY  = nil
-                                        pw.flyCheckTick = nil
-                                    else
-                                        pw.flyCheckY    = yPos
-                                        pw.flyCheckTick = tick()
-                                    end
-                                end
-
-                                -- Если в воздухе >= FLY_CHEAT_TIME и airStart ещё не сброшен
-                                if pw.airStart and elapsed >= FLY_CHEAT_TIME then
-                                    pw.flaggedFly = true
-                                    if onCheatDetected then
-                                        onCheatDetected(player, speed, "FLY")
-                                    end
-                                    -- Сбрасываем через 8 сек чтобы ловить повторные влёты
-                                    task.delay(8, function()
-                                        if playerWatch[player.UserId] then
-                                            playerWatch[player.UserId].flaggedFly = false
-                                            playerWatch[player.UserId].airStart    = nil
-                                            playerWatch[player.UserId].flyCheckY   = nil
-                                            playerWatch[player.UserId].flyCheckTick = nil
-                                        end
-                                    end)
-                                end
+                        task.delay(8, function()
+                            if playerWatch[player.UserId] then
+                                playerWatch[player.UserId].flaggedFly1 = false
+                                playerWatch[player.UserId].flyStart    = nil
                             end
-                        elseif onGround then
-                            -- Приземлился — сбрасываем и подтверждаем landing
-                            pw.hasLanded    = true
-                            pw.airStart     = nil
-                            pw.flyLastY     = nil
-                            pw.flyCheckY    = nil
-                            pw.flyCheckTick = nil
-                        end
+                        end)
                     end
+                else
+                    pw.flyStart = nil
                 end
             end
 
-            -- Для спид-чека игнорируем воздух
-            if isNormalAir then
-                pw.sprintStart = nil
-                continue
+            -- === ФЛАЙ ДЕТЕКТ ТИП 2: наклон персонажа ===
+            if not pw.flaggedFly2 then
+                local char_ = player.Character
+                local hrp_  = char_ and char_:FindFirstChild("HumanoidRootPart")
+                if hrp_ then
+                    -- UpVector.Y = 1.0 когда стоит прямо, меньше = наклонён
+                    local upY = hrp_.CFrame.UpVector.Y
+                    if upY < TILT_THRESHOLD then
+                        if pw.tiltStart == nil then
+                            pw.tiltStart = tick()
+                        elseif tick() - pw.tiltStart >= FLY2_TIME then
+                            pw.flaggedFly2 = true
+                            if onCheatDetected then
+                                onCheatDetected(player, speed, "FLY2")
+                            end
+                            task.delay(8, function()
+                                if playerWatch[player.UserId] then
+                                    playerWatch[player.UserId].flaggedFly2 = false
+                                    playerWatch[player.UserId].tiltStart   = nil
+                                end
+                            end)
+                        end
+                    else
+                        pw.tiltStart = nil
+                    end
+                end
             end
 
             -- === СКОРОСТЬ ДЕТЕКТ ===
@@ -410,12 +375,10 @@ task.spawn(function()
                 local pw = playerWatch[p.UserId]
                 local st = "норма"
                 if pw then
-                    if pw.flaggedFly then st = "ЗАДЕТЕКТЕН(флай)"
-                    elseif pw.flagged then st = "ЗАДЕТЕКТЕН(спид)"
+                    if pw.flagged then
+                        st = "ЗАДЕТЕКТЕН"
                     elseif pw.sprintStart then
-                        st = "подозрение_спид " .. math.floor(tick() - pw.sprintStart) .. "с"
-                    elseif pw.airStart then
-                        st = "подозрение_флай " .. math.floor(tick() - pw.airStart) .. "с"
+                        st = "подозрение " .. math.floor(tick() - pw.sprintStart) .. "с"
                     end
                 end
                 table.insert(snap, p.Name .. " (скорость=" .. spd .. ", статус=" .. st .. ")")
@@ -1083,6 +1046,39 @@ provInfo.Text = "Gemini 3.1 Flash-Lite — основной\nGroq GPT-OSS 120B �
 
 tabPages[4] = settingsPage
 
+-- ============================================
+-- СТРАНИЦА 4: РАУНД
+-- ============================================
+local roundPage = makePage()
+
+-- Счётчик сверху
+local roundCountLabel = Instance.new("TextLabel", roundPage)
+roundCountLabel.Size = UDim2.new(0.9, 0, 0, 22)
+roundCountLabel.Position = UDim2.new(0.05, 0, 0, 6)
+roundCountLabel.BackgroundTransparency = 1
+roundCountLabel.TextColor3 = Color3.fromRGB(200, 200, 240)
+roundCountLabel.TextSize = 11
+roundCountLabel.Font = Enum.Font.GothamBold
+roundCountLabel.TextXAlignment = Enum.TextXAlignment.Left
+roundCountLabel.Text = "Выживших: — | Заражённых: — | Мёртвых: —"
+
+-- Список игроков
+local roundScroll = Instance.new("ScrollingFrame", roundPage)
+roundScroll.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
+roundScroll.Size = UDim2.new(0.9, 0, 1, -36)
+roundScroll.Position = UDim2.new(0.05, 0, 0, 30)
+roundScroll.BorderSizePixel = 0
+roundScroll.ScrollBarThickness = 3
+roundScroll.ScrollBarImageColor3 = Color3.fromRGB(0, 150, 255)
+roundScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+Instance.new("UICorner", roundScroll).CornerRadius = UDim.new(0, 8)
+local roundLayout = Instance.new("UIListLayout", roundScroll)
+roundLayout.Padding = UDim.new(0, 3)
+roundLayout.SortOrder = Enum.SortOrder.LayoutOrder
+local roundPad = Instance.new("UIPadding", roundScroll)
+roundPad.PaddingLeft = UDim.new(0, 5)
+roundPad.PaddingTop = UDim.new(0, 4)
+
 -- =============================================
 -- TAB SWITCHING
 -- =============================================
@@ -1309,8 +1305,12 @@ onCheatDetected = function(player, speed, reason)
     elseif reason == "SPEED_SUSTAINED" then
         reasonText = "скорость " .. speedRounded .. " держится более 5 сек"
         cheatType = "СПИДХАК"
-    elseif reason == "FLY" then
-        reasonText = "флай (в воздухе более 3 сек без прыжка/падения)"
+    elseif reason == "FLY1" then
+        reasonText = "в состоянии Freefall/Jump более 4 сек (флай)"
+        cheatType = "ФЛАЙ"
+        speedRounded = nil
+    elseif reason == "FLY2" then
+        reasonText = "персонаж наклонён более 4 сек (флай)"
         cheatType = "ФЛАЙ"
         speedRounded = nil
     end
