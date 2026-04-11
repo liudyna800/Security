@@ -254,30 +254,42 @@ task.spawn(function()
                 end
             end
 
-            -- === ФЛАЙ ДЕТЕКТ ТИП 2: наклон персонажа ===
+            -- === ФЛАЙ ДЕТЕКТ ТИП 2: наклон торса (BodyGyro флай) ===
+            -- Fly GUI V3 наклоняет UpperTorso/Torso через BodyGyro
+            -- Swimming состояние + наклон = флай
             if not pw.flaggedFly2 then
                 local char_ = player.Character
-                local hrp_  = char_ and char_:FindFirstChild("HumanoidRootPart")
-                if hrp_ then
-                    -- UpVector.Y = 1.0 когда стоит прямо, меньше = наклонён
-                    local upY = hrp_.CFrame.UpVector.Y
-                    if upY < TILT_THRESHOLD then
-                        if pw.tiltStart == nil then
-                            pw.tiltStart = tick()
-                        elseif tick() - pw.tiltStart >= FLY2_TIME then
-                            pw.flaggedFly2 = true
-                            if onCheatDetected then
-                                onCheatDetected(player, speed, "FLY2")
-                            end
-                            task.delay(8, function()
-                                if playerWatch[player.UserId] then
-                                    playerWatch[player.UserId].flaggedFly2 = false
-                                    playerWatch[player.UserId].tiltStart   = nil
+                if char_ then
+                    -- Проверяем торс (R15 = UpperTorso, R6 = Torso)
+                    local torso_ = char_:FindFirstChild("UpperTorso") or char_:FindFirstChild("Torso")
+                    local hum_   = char_:FindFirstChildOfClass("Humanoid")
+                    if torso_ and hum_ then
+                        local upY    = torso_.CFrame.UpVector.Y
+                        local state_ = hum_:GetState()
+                        local isSwim = state_ == Enum.HumanoidStateType.Swimming
+                        -- Наклон: UpVector.Y < 0.7 (норма = 1.0)
+                        -- Или: Swimming состояние пока не в воде (FloorMaterial != Water)
+                        local inWater = hum_.FloorMaterial == Enum.Material.Water
+                        local isTilted = upY < TILT_THRESHOLD
+                        local isSuspect = isTilted or (isSwim and not inWater)
+                        if isSuspect then
+                            if pw.tiltStart == nil then
+                                pw.tiltStart = tick()
+                            elseif tick() - pw.tiltStart >= FLY2_TIME then
+                                pw.flaggedFly2 = true
+                                if onCheatDetected then
+                                    onCheatDetected(player, speed, "FLY2")
                                 end
-                            end)
+                                task.delay(8, function()
+                                    if playerWatch[player.UserId] then
+                                        playerWatch[player.UserId].flaggedFly2 = false
+                                        playerWatch[player.UserId].tiltStart   = nil
+                                    end
+                                end)
+                            end
+                        else
+                            pw.tiltStart = nil
                         end
-                    else
-                        pw.tiltStart = nil
                     end
                 end
             end
