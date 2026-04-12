@@ -1,6 +1,5 @@
 -- [[ SECURITY V5 — ANTICHEAT EDITION ]]
 -- Tabs: Kicker | Blacklist | Logs | Settings
-ф
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
