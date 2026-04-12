@@ -1,10 +1,22 @@
 -- [[ SECURITY V5 — ANTICHEAT EDITION ]]
 -- Tabs: Kicker | Blacklist | Logs | Settings
-
+ф
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+
+-- Проверка видимости окна (чтобы не спамило невидимыми кнопками)
+local function isGuiVisible(obj)
+    local current = obj
+    while current and current ~= game do
+        if current:IsA("GuiObject") and not current.Visible then
+            return false
+        end
+        current = current.Parent
+    end
+    return true
+end
 
 -- =============================================
 -- SETTINGS
@@ -60,23 +72,33 @@ loadBlacklist()
 task.spawn(function()
     while true do
         task.wait(3)
+        local lpGui = Players.LocalPlayer:FindFirstChild("PlayerGui")
+        if not lpGui then continue end
+
         for _, player in ipairs(Players:GetPlayers()) do
             if blacklist[player.Name:lower()] then
-                for _, obj in ipairs(game:GetDescendants()) do
-                    if obj:IsA("GuiButton") and obj.Name == "Kick" then
-                        pcall(function()
-                            if firesignal then firesignal(obj.Activated); firesignal(obj.MouseButton1Click)
-                            else obj:Click() end
-                        end)
-                        break
-                    end
-                end
-                task.wait(0.4)
-                for _, obj in ipairs(game:GetDescendants()) do
-                    if obj:IsA("TextButton") or obj:IsA("ImageButton") then
+                local targetFound = false
+                
+                -- Ищем ник в открытых меню
+                for _, obj in ipairs(lpGui:GetDescendants()) do
+                    if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and isGuiVisible(obj) then
                         local nm = obj.Name:lower():find(player.Name:lower())
                         local tm = obj:IsA("TextButton") and obj.Text:lower():find(player.Name:lower())
                         if nm or tm then
+                            pcall(function()
+                                if firesignal then firesignal(obj.Activated); firesignal(obj.MouseButton1Click)
+                                else obj:Click() end
+                            end)
+                            targetFound = true
+                            break
+                        end
+                    end
+                end
+
+                -- Если ника нет, открываем меню Kick
+                if not targetFound then
+                    for _, obj in ipairs(lpGui:GetDescendants()) do
+                        if obj:IsA("GuiButton") and obj.Name == "Kick" and isGuiVisible(obj) then
                             pcall(function()
                                 if firesignal then firesignal(obj.Activated); firesignal(obj.MouseButton1Click)
                                 else obj:Click() end
@@ -921,11 +943,12 @@ onCheatDetected = function(player, speed, reason)
 end
 
 -- =============================================
--- KICKING LOGIC
+-- KICKING LOGIC (ИСправлены баги лагов и окон)
 -- =============================================
 local active = false
 local lastKickOpen = 0
-local kickCooldown = 1.0
+local kickCooldown = 2.0 -- Задержка между открытием меню
+local menuOpened = false
 
 local function fastClick(obj)
     pcall(function()
@@ -937,30 +960,50 @@ end
 task.spawn(function()
     while true do
         if active then
-            local target = InputField.Text:lower()
+            local target = InputField.Text:lower():gsub("%s", "")
             if target == "" then
                 StatusLabel.Text = "Error: Enter username!"
                 task.wait(0.5)
             else
-                local targetFound = false
-                for _, obj in ipairs(game:GetDescendants()) do
-                    if not active then break end
-                    if obj:IsA("TextButton") or obj:IsA("ImageButton") then
-                        local nameMatch = obj.Name:lower():find(target)
-                        local textMatch = false
-                        if obj:IsA("TextButton") then textMatch = obj.Text:lower():find(target) end
-                        if nameMatch or textMatch then
-                            fastClick(obj); StatusLabel.Text = "CLICKED USERNAME!"
-                            targetFound = true; task.wait(0.5); break
-                        end
+                -- 1. Проверяем, есть ли игрок на сервере
+                local playerFound = false
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name:lower():find(target) or p.DisplayName:lower():find(target) then
+                        playerFound = true
+                        break
                     end
                 end
-                if not targetFound then
-                    if tick() - lastKickOpen > kickCooldown then
-                        for _, obj in ipairs(game:GetDescendants()) do
-                            if obj.Name == "Kick" and obj:IsA("GuiButton") then
-                                fastClick(obj); lastKickOpen = tick()
-                                StatusLabel.Text = "Opening menu..."; break
+
+                if not playerFound then
+                    StatusLabel.Text = "Status: Target not found!"
+                    menuOpened = false
+                    task.wait(1)
+                else
+                    -- 2. Если игрок есть, ищем только в своем PlayerGui, а не во всем game
+                    local lpGui = Players.LocalPlayer:FindFirstChild("PlayerGui")
+                    if lpGui then
+                        local targetFound = false
+                        for _, obj in ipairs(lpGui:GetDescendants()) do
+                            if not active then break end
+                            if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and isGuiVisible(obj) then
+                                local nameMatch = obj.Name:lower():find(target)
+                                local textMatch = false
+                                if obj:IsA("TextButton") then textMatch = obj.Text:lower():find(target) end
+                                if nameMatch or textMatch then
+                                    fastClick(obj); StatusLabel.Text = "CLICKED USERNAME!"
+                                    targetFound = true; menuOpened = false; task.wait(0.5); break
+                                end
+                            end
+                        end
+                        -- Если ника на экране нет, пробуем нажать Kick
+                        if not targetFound then
+                            if not menuOpened or (tick() - lastKickOpen > kickCooldown) then
+                                for _, obj in ipairs(lpGui:GetDescendants()) do
+                                    if obj.Name == "Kick" and obj:IsA("GuiButton") and isGuiVisible(obj) then
+                                        fastClick(obj); lastKickOpen = tick(); menuOpened = true
+                                        StatusLabel.Text = "Opening menu..."; break
+                                    end
+                                end
                             end
                         end
                     end
@@ -968,8 +1011,9 @@ task.spawn(function()
             end
         else
             StatusLabel.Text = "Status: Stopped"
+            menuOpened = false
         end
-        task.wait(0.1)
+        task.wait(0.25)
     end
 end)
 
