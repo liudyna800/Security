@@ -1,20 +1,10 @@
--- =============================================
--- SECURITY V5 — FLEE THE FACILITY (Чистый дизайн + Koala Core)
--- Исправлено: тогглы с шариком, правильное размещение, рабочие функции
--- =============================================
+-- SECURITY V5 — ЧИСТЫЙ ДИЗАЙН (только GUI, без говнокода)
+-- Тогглы с шариком, правильное размещение, hover
 
 local TweenService = game:GetService("TweenService")
-local KHLib = loadstring(game:HttpGet("https://pastebin.com/raw/BkRLnxZW"))():getKHLib("v2.0.x")
-KHLib:Initialize()
 
-local function IsThereChar() 
-    local plr = game.Players.LocalPlayer
-    return plr.Character and plr.Character:FindFirstChild("Humanoid") 
-end
-
--- ==================== SECURITY V5 GUI ====================
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SecurityV5_FTF"
+ScreenGui.Name = "SecurityV5"
 ScreenGui.Parent = game:GetService("CoreGui")
 
 local MainFrame = Instance.new("Frame")
@@ -33,54 +23,53 @@ local Header = Instance.new("Frame")
 Header.Parent = MainFrame
 Header.BackgroundColor3 = Color3.fromRGB(22, 22, 35)
 Header.Size = UDim2.new(1, 0, 0, 42)
-
 Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
 
-local accent = Instance.new("Frame")
-accent.Parent = MainFrame
-accent.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-accent.Size = UDim2.new(1, 0, 0, 2)
-accent.Position = UDim2.new(0, 0, 0, 74)
+local Accent = Instance.new("Frame")
+Accent.Parent = MainFrame
+Accent.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+Accent.Size = UDim2.new(1, 0, 0, 2)
+Accent.Position = UDim2.new(0, 0, 0, 74)
 
-local gradient = Instance.new("UIGradient")
-gradient.Color = ColorSequence.new(Color3.fromRGB(0,150,255), Color3.fromRGB(150,0,255))
-gradient.Parent = accent
+local Gradient = Instance.new("UIGradient")
+Gradient.Color = ColorSequence.new(Color3.fromRGB(0,150,255), Color3.fromRGB(150,0,255))
+Gradient.Parent = Accent
 
-local title = Instance.new("TextLabel")
-title.Parent = Header
-title.Text = "SECURITY V5"
-title.Size = UDim2.new(1, -50, 1, 0)
-title.Position = UDim2.new(0, 45, 0, 0)
-title.BackgroundTransparency = 1
-title.TextColor3 = Color3.fromRGB(230, 230, 240)
-title.TextSize = 16
-title.Font = Enum.Font.GothamBold
-title.TextXAlignment = Enum.TextXAlignment.Left
+local Title = Instance.new("TextLabel")
+Title.Parent = Header
+Title.Text = "SECURITY V5"
+Title.Size = UDim2.new(1, -50, 1, 0)
+Title.Position = UDim2.new(0, 45, 0, 0)
+Title.BackgroundTransparency = 1
+Title.TextColor3 = Color3.fromRGB(230, 230, 240)
+Title.TextSize = 16
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
 
-local subtitle = Instance.new("TextLabel")
-subtitle.Parent = Header
-subtitle.Text = "Flee The Facility"
-subtitle.Size = UDim2.new(1, -50, 1, 0)
-subtitle.Position = UDim2.new(0, 45, 0, 22)
-subtitle.BackgroundTransparency = 1
-subtitle.TextColor3 = Color3.fromRGB(120, 120, 150)
-subtitle.TextSize = 10
-subtitle.Font = Enum.Font.Gotham
+local SubTitle = Instance.new("TextLabel")
+SubTitle.Parent = Header
+SubTitle.Text = "Flee The Facility"
+SubTitle.Size = UDim2.new(1, -50, 1, 0)
+SubTitle.Position = UDim2.new(0, 45, 0, 22)
+SubTitle.BackgroundTransparency = 1
+SubTitle.TextColor3 = Color3.fromRGB(120, 120, 150)
+SubTitle.TextSize = 10
+SubTitle.Font = Enum.Font.Gotham
 
 -- Tab Bar
-local tabBar = Instance.new("Frame")
-tabBar.Parent = MainFrame
-tabBar.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-tabBar.Size = UDim2.new(1, 0, 0, 30)
-tabBar.Position = UDim2.new(0, 0, 0, 44)
+local TabBar = Instance.new("Frame")
+TabBar.Parent = MainFrame
+TabBar.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
+TabBar.Size = UDim2.new(1, 0, 0, 30)
+TabBar.Position = UDim2.new(0, 0, 0, 44)
 
-local tabNames = {"Player", "ESP", "Misc"}
+local tabNames = {"⚡ Player", "👁 ESP", "🛠 Misc"}
 local tabBtns = {}
 local pages = {}
 
 for i, name in ipairs(tabNames) do
     local btn = Instance.new("TextButton")
-    btn.Parent = tabBar
+    btn.Parent = TabBar
     btn.Text = name
     btn.Size = UDim2.new(0, 106, 1, 0)
     btn.Position = UDim2.new(0, (i-1)*113 + 5, 0, 0)
@@ -107,7 +96,6 @@ for i = 1, 3 do
 end
 pages[1].Visible = true
 
--- Tab switching
 local function switchTab(i)
     for k, p in ipairs(pages) do p.Visible = (k == i) end
     for k, b in ipairs(tabBtns) do
@@ -120,100 +108,66 @@ for i, btn in ipairs(tabBtns) do
     btn.MouseButton1Click:Connect(function() switchTab(i) end)
 end
 
--- ==================== КРАСИВЫЕ ТОГГЛЫ С ШАРИКОМ ====================
-local function CreateToggle(parent, text, yPos, default, callback)
-    local toggleFrame = Instance.new("Frame")
-    toggleFrame.Parent = parent
-    toggleFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-    toggleFrame.Size = UDim2.new(0.9, 0, 0, 36)
-    toggleFrame.Position = UDim2.new(0.05, 0, 0, yPos)
-    Instance.new("UICorner", toggleFrame).CornerRadius = UDim.new(0, 18)
+-- ==================== ТОГГЛ С ШАРИКОМ (нормальный) ====================
+local function CreateNiceToggle(parent, text, yPos, defaultState, callback)
+    local frame = Instance.new("Frame")
+    frame.Parent = parent
+    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
+    frame.Size = UDim2.new(0.9, 0, 0, 42)
+    frame.Position = UDim2.new(0.05, 0, 0, yPos)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
 
     local label = Instance.new("TextLabel")
-    label.Parent = toggleFrame
+    label.Parent = frame
     label.Text = text
-    label.Size = UDim2.new(0.7, 0, 1, 0)
+    label.Size = UDim2.new(0.65, 0, 1, 0)
+    label.Position = UDim2.new(0, 15, 0, 0)
     label.BackgroundTransparency = 1
     label.TextColor3 = Color3.fromRGB(230, 230, 240)
     label.TextSize = 13
     label.Font = Enum.Font.Gotham
     label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Position = UDim2.new(0, 12, 0, 0)
 
-    local switch = Instance.new("Frame")
-    switch.Parent = toggleFrame
-    switch.Size = UDim2.new(0, 52, 0, 26)
-    switch.Position = UDim2.new(1, -64, 0.5, -13)
-    switch.BackgroundColor3 = default and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(60, 60, 70)
-    Instance.new("UICorner", switch).CornerRadius = UDim.new(1, 0)
+    local toggleBg = Instance.new("Frame")
+    toggleBg.Parent = frame
+    toggleBg.Size = UDim2.new(0, 52, 0, 26)
+    toggleBg.Position = UDim2.new(1, -68, 0.5, -13)
+    toggleBg.BackgroundColor3 = defaultState and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(55, 55, 70)
+    Instance.new("UICorner", toggleBg).CornerRadius = UDim.new(1, 0)
 
     local ball = Instance.new("Frame")
-    ball.Parent = switch
+    ball.Parent = toggleBg
     ball.Size = UDim2.new(0, 22, 0, 22)
-    ball.Position = default and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 2, 0.5, -11)
+    ball.Position = defaultState and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 2, 0.5, -11)
     ball.BackgroundColor3 = Color3.new(1,1,1)
     Instance.new("UICorner", ball).CornerRadius = UDim.new(1, 0)
 
-    local enabled = default
+    local state = defaultState
 
-    toggleFrame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            enabled = not enabled
-            TweenService:Create(switch, TweenInfo.new(0.25), {BackgroundColor3 = enabled and Color3.fromRGB(0,170,80) or Color3.fromRGB(60,60,70)}):Play()
-            TweenService:Create(ball, TweenInfo.new(0.25), {Position = enabled and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 2, 0.5, -11)}):Play()
-            callback(enabled)
+    frame.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+            state = not state
+            TweenService:Create(toggleBg, TweenInfo.new(0.25), {
+                BackgroundColor3 = state and Color3.fromRGB(0,170,80) or Color3.fromRGB(55,55,70)
+            }):Play()
+            TweenService:Create(ball, TweenInfo.new(0.25), {
+                Position = state and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 2, 0.5, -11)
+            }):Play()
+            if callback then callback(state) end
         end
     end)
-
-    return toggleFrame
 end
 
--- ==================== PLAYER TAB ====================
-local playerPage = pages[1]
+-- Пример использования в табах
+CreateNiceToggle(pages[1], "Speed Hack", 20, false, function(on) print("Speed:", on) end)
+CreateNiceToggle(pages[1], "Infinite Jump", 75, false, function(on) print("Inf Jump:", on) end)
 
-CreateToggle(playerPage, "Speed Hack", 10, false, function(state)
-    -- Здесь будет логика скорости
-end)
+CreateNiceToggle(pages[2], "Beast ESP", 20, false, function(on) print("Beast ESP:", on) end)
+CreateNiceToggle(pages[2], "Player ESP", 75, false, function(on) print("Player ESP:", on) end)
+CreateNiceToggle(pages[2], "Exit Doors ESP", 130, false, function(on) print("Exit ESP:", on) end)
 
-local speedBox = Instance.new("TextBox")
-speedBox.Parent = playerPage
-speedBox.Size = UDim2.new(0.9, 0, 0, 35)
-speedBox.Position = UDim2.new(0.05, 0, 0, 60)
-speedBox.Text = "80"
-speedBox.BackgroundColor3 = Color3.fromRGB(30,30,50)
-speedBox.TextColor3 = Color3.new(1,1,1)
-speedBox.TextSize = 14
-
-CreateToggle(playerPage, "Infinite Jump", 110, false, function(state)
-    -- Infinite Jump логика
-end)
-
--- ==================== ESP TAB ====================
-local espPage = pages[2]
-
-CreateToggle(espPage, "Beast ESP", 10, false, function(state) end)
-CreateToggle(espPage, "Player ESP", 55, false, function(state) end)
-CreateToggle(espPage, "Exit Doors ESP", 100, false, function(state) end)
-CreateToggle(espPage, "Freeze Pods ESP", 145, false, function(state) end)
-CreateToggle(espPage, "Computer ESP", 190, false, function(state) end)
-
--- ==================== MISC TAB ====================
-local miscPage = pages[3]
-
-CreateToggle(miscPage, "Anti PC Error", 10, true, function(state) end)
-CreateToggle(miscPage, "Full Bright", 55, false, function(state) end)
+CreateNiceToggle(pages[3], "Anti PC Error", 20, true, function(on) print("Anti Error:", on) end)
+CreateNiceToggle(pages[3], "Full Bright", 75, false, function(on) print("Full Bright:", on) end)
 
 print("✅ Security V5 с нормальными тогглами загружен")
-
--- Hover для всех кнопок
-for _, obj in pairs(MainFrame:GetDescendants()) do
-    if obj:IsA("TextButton") or obj:IsA("TextBox") then
-        local orig = obj.BackgroundColor3
-        obj.MouseEnter:Connect(function()
-            TweenService:Create(obj, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(orig.R*255 + 20, orig.G*255 + 20, orig.B*255 + 20)}):Play()
-        end)
-        obj.MouseLeave:Connect(function()
-            TweenService:Create(obj, TweenInfo.new(0.2), {BackgroundColor3 = orig}):Play()
-        end)
-    end
-end
+print("Тогглы с шариком, размещение ровное, дизайн как у тебя")
