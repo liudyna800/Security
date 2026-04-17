@@ -1,173 +1,336 @@
--- SECURITY V5 — ЧИСТЫЙ ДИЗАЙН (только GUI, без говнокода)
--- Тогглы с шариком, правильное размещение, hover
+-- [[ FLEE THE FACILITY — LOGIC CORE (NO GUI) ]]
+-- All toggles are plain booleans. Connect them to your GUI buttons.
 
-local TweenService = game:GetService("TweenService")
+local Players         = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService      = game:GetService("RunService")
+local Lighting        = game:GetService("Lighting")
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SecurityV5"
-ScreenGui.Parent = game:GetService("CoreGui")
+local LocalPlayer = Players.LocalPlayer
+local Comp = 0
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Parent = ScreenGui
-MainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
-MainFrame.Size = UDim2.new(0, 340, 0, 280)
-MainFrame.Position = UDim2.new(0.5, -170, 0.5, -140)
-MainFrame.Active = true
-MainFrame.Draggable = true
-
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
-Instance.new("UIStroke", MainFrame).Color = Color3.fromRGB(40, 40, 70)
-
--- Header
-local Header = Instance.new("Frame")
-Header.Parent = MainFrame
-Header.BackgroundColor3 = Color3.fromRGB(22, 22, 35)
-Header.Size = UDim2.new(1, 0, 0, 42)
-Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
-
-local Accent = Instance.new("Frame")
-Accent.Parent = MainFrame
-Accent.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-Accent.Size = UDim2.new(1, 0, 0, 2)
-Accent.Position = UDim2.new(0, 0, 0, 74)
-
-local Gradient = Instance.new("UIGradient")
-Gradient.Color = ColorSequence.new(Color3.fromRGB(0,150,255), Color3.fromRGB(150,0,255))
-Gradient.Parent = Accent
-
-local Title = Instance.new("TextLabel")
-Title.Parent = Header
-Title.Text = "SECURITY V5"
-Title.Size = UDim2.new(1, -50, 1, 0)
-Title.Position = UDim2.new(0, 45, 0, 0)
-Title.BackgroundTransparency = 1
-Title.TextColor3 = Color3.fromRGB(230, 230, 240)
-Title.TextSize = 16
-Title.Font = Enum.Font.GothamBold
-Title.TextXAlignment = Enum.TextXAlignment.Left
-
-local SubTitle = Instance.new("TextLabel")
-SubTitle.Parent = Header
-SubTitle.Text = "Flee The Facility"
-SubTitle.Size = UDim2.new(1, -50, 1, 0)
-SubTitle.Position = UDim2.new(0, 45, 0, 22)
-SubTitle.BackgroundTransparency = 1
-SubTitle.TextColor3 = Color3.fromRGB(120, 120, 150)
-SubTitle.TextSize = 10
-SubTitle.Font = Enum.Font.Gotham
-
--- Tab Bar
-local TabBar = Instance.new("Frame")
-TabBar.Parent = MainFrame
-TabBar.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-TabBar.Size = UDim2.new(1, 0, 0, 30)
-TabBar.Position = UDim2.new(0, 0, 0, 44)
-
-local tabNames = {"⚡ Player", "👁 ESP", "🛠 Misc"}
-local tabBtns = {}
-local pages = {}
-
-for i, name in ipairs(tabNames) do
-    local btn = Instance.new("TextButton")
-    btn.Parent = TabBar
-    btn.Text = name
-    btn.Size = UDim2.new(0, 106, 1, 0)
-    btn.Position = UDim2.new(0, (i-1)*113 + 5, 0, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(18, 18, 30)
-    btn.TextColor3 = Color3.fromRGB(130, 130, 160)
-    btn.TextSize = 12
-    btn.Font = Enum.Font.GothamBold
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-    tabBtns[i] = btn
+-- =============================================
+-- HELPERS
+-- =============================================
+local function IsThereChar(APlr)
+    local plr = APlr or LocalPlayer
+    if plr.Character and plr.Character:FindFirstChild("Humanoid") then
+        return true
+    end
+    return false
 end
 
-local function makePage()
-    local p = Instance.new("Frame")
-    p.Parent = MainFrame
-    p.BackgroundTransparency = 1
-    p.Size = UDim2.new(1, 0, 1, -78)
-    p.Position = UDim2.new(0, 0, 0, 78)
-    p.Visible = false
-    return p
-end
+-- =============================================
+-- TOGGLES (set these from your GUI)
+-- =============================================
+local T = {
+    -- Player
+    speedEnabled  = false,
+    speedValue    = 16,
+    jumpEnabled   = false,
+    jumpValue     = 50,
+    infiniteJump  = false,
+    fullbright    = false,
+    -- ESP
+    beastESP      = false,
+    playerESP     = false,
+    exitESP       = false,
+    podESP        = false,
+    computerESP   = false,
+    -- Misc
+    autoRemoveRope = false,
+    beastCrawl    = false,
+    antiPCError   = false,
+}
 
-for i = 1, 3 do
-    pages[i] = makePage()
-end
-pages[1].Visible = true
+-- =============================================
+-- INFINITE JUMP
+-- =============================================
+UserInputService.JumpRequest:Connect(function()
+    if T.infiniteJump and IsThereChar() then
+        LocalPlayer.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end)
 
-local function switchTab(i)
-    for k, p in ipairs(pages) do p.Visible = (k == i) end
-    for k, b in ipairs(tabBtns) do
-        b.BackgroundColor3 = (k == i) and Color3.fromRGB(30,30,55) or Color3.fromRGB(18,18,30)
-        b.TextColor3 = (k == i) and Color3.fromRGB(0,170,255) or Color3.fromRGB(130,130,160)
+-- =============================================
+-- ESP TABLES
+-- =============================================
+local BeastHighlights   = {}
+local PlrHighlights     = {}
+local ExitHighlights    = {}
+local PodHighlights     = {}
+local PCHighlights      = {}
+
+local function clearHighlights(tbl)
+    for i = #tbl, 1, -1 do
+        if tbl[i] and tbl[i].Parent then tbl[i]:Destroy() end
+        table.remove(tbl, i)
     end
 end
 
-for i, btn in ipairs(tabBtns) do
-    btn.MouseButton1Click:Connect(function() switchTab(i) end)
-end
-
--- ==================== ТОГГЛ С ШАРИКОМ (нормальный) ====================
-local function CreateNiceToggle(parent, text, yPos, defaultState, callback)
-    local frame = Instance.new("Frame")
-    frame.Parent = parent
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-    frame.Size = UDim2.new(0.9, 0, 0, 42)
-    frame.Position = UDim2.new(0.05, 0, 0, yPos)
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
-
-    local label = Instance.new("TextLabel")
-    label.Parent = frame
-    label.Text = text
-    label.Size = UDim2.new(0.65, 0, 1, 0)
-    label.Position = UDim2.new(0, 15, 0, 0)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(230, 230, 240)
-    label.TextSize = 13
-    label.Font = Enum.Font.Gotham
-    label.TextXAlignment = Enum.TextXAlignment.Left
-
-    local toggleBg = Instance.new("Frame")
-    toggleBg.Parent = frame
-    toggleBg.Size = UDim2.new(0, 52, 0, 26)
-    toggleBg.Position = UDim2.new(1, -68, 0.5, -13)
-    toggleBg.BackgroundColor3 = defaultState and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(55, 55, 70)
-    Instance.new("UICorner", toggleBg).CornerRadius = UDim.new(1, 0)
-
-    local ball = Instance.new("Frame")
-    ball.Parent = toggleBg
-    ball.Size = UDim2.new(0, 22, 0, 22)
-    ball.Position = defaultState and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 2, 0.5, -11)
-    ball.BackgroundColor3 = Color3.new(1,1,1)
-    Instance.new("UICorner", ball).CornerRadius = UDim.new(1, 0)
-
-    local state = defaultState
-
-    frame.InputBegan:Connect(function(inp)
-        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
-            state = not state
-            TweenService:Create(toggleBg, TweenInfo.new(0.25), {
-                BackgroundColor3 = state and Color3.fromRGB(0,170,80) or Color3.fromRGB(55,55,70)
-            }):Play()
-            TweenService:Create(ball, TweenInfo.new(0.25), {
-                Position = state and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 2, 0.5, -11)
-            }):Play()
-            if callback then callback(state) end
+-- =============================================
+-- ESP UPDATE FUNCTIONS
+-- =============================================
+local function UpdateBeastESP()
+    -- Remove invalid
+    for i = #BeastHighlights, 1, -1 do
+        local h = BeastHighlights[i]
+        if not T.beastESP or h.Adornee == nil then
+            h:Destroy(); table.remove(BeastHighlights, i)
         end
-    end)
+    end
+    if not T.beastESP then return end
+    for _, v in pairs(Players:GetPlayers()) do
+        if v.Character and v.Character:FindFirstChild("BeastPowers") and v ~= LocalPlayer then
+            -- Check not already highlighted
+            local already = false
+            for _, h in pairs(BeastHighlights) do
+                if h.Adornee == v.Character then already = true; break end
+            end
+            if not already then
+                local h = Instance.new("Highlight")
+                h.Adornee = v.Character
+                h.Parent  = v.Character
+                table.insert(BeastHighlights, h)
+            end
+        end
+    end
 end
 
--- Пример использования в табах
-CreateNiceToggle(pages[1], "Speed Hack", 20, false, function(on) print("Speed:", on) end)
-CreateNiceToggle(pages[1], "Infinite Jump", 75, false, function(on) print("Inf Jump:", on) end)
+local function UpdatePlrESP()
+    for i = #PlrHighlights, 1, -1 do
+        local h = PlrHighlights[i]
+        if not T.playerESP or h.Adornee == nil or h.Adornee.Parent == nil
+            or h.Adornee.Parent:FindFirstChild("BeastPowers") then
+            h:Destroy(); table.remove(PlrHighlights, i)
+        end
+    end
+    if not T.playerESP then return end
+    for _, v in pairs(Players:GetPlayers()) do
+        if v.Character and not v.Character:FindFirstChild("BeastPowers") and v ~= LocalPlayer then
+            local already = false
+            for _, h in pairs(PlrHighlights) do
+                if h.Adornee == v.Character then already = true; break end
+            end
+            if not already then
+                local h = Instance.new("Highlight")
+                h.Adornee   = v.Character
+                h.FillColor = Color3.fromRGB(0, 255, 0)
+                h.Parent    = v.Character
+                table.insert(PlrHighlights, h)
+            end
+        end
+    end
+end
 
-CreateNiceToggle(pages[2], "Beast ESP", 20, false, function(on) print("Beast ESP:", on) end)
-CreateNiceToggle(pages[2], "Player ESP", 75, false, function(on) print("Player ESP:", on) end)
-CreateNiceToggle(pages[2], "Exit Doors ESP", 130, false, function(on) print("Exit ESP:", on) end)
+local function UpdateExitESP()
+    for i = #ExitHighlights, 1, -1 do
+        local h = ExitHighlights[i]
+        if not T.exitESP or h.Adornee == nil then
+            h:Destroy(); table.remove(ExitHighlights, i)
+        end
+    end
+    if not T.exitESP then return end
+    for _, v in pairs(game.Workspace:GetDescendants()) do
+        if v.Name == "ExitDoor" then
+            local already = false
+            for _, h in pairs(ExitHighlights) do
+                if h.Adornee == v then already = true; break end
+            end
+            if not already then
+                local h = Instance.new("Highlight")
+                h.Adornee   = v
+                h.FillColor = Color3.fromRGB(150, 255, 0)
+                h.Parent    = v
+                table.insert(ExitHighlights, h)
+            end
+        end
+    end
+end
 
-CreateNiceToggle(pages[3], "Anti PC Error", 20, true, function(on) print("Anti Error:", on) end)
-CreateNiceToggle(pages[3], "Full Bright", 75, false, function(on) print("Full Bright:", on) end)
+local function UpdatePodESP()
+    for i = #PodHighlights, 1, -1 do
+        local h = PodHighlights[i]
+        if not T.podESP or h.Adornee == nil then
+            h:Destroy(); table.remove(PodHighlights, i)
+        end
+    end
+    if not T.podESP then return end
+    for _, v in pairs(game.Workspace:GetDescendants()) do
+        if v.Name == "FreezePod" then
+            local already = false
+            for _, h in pairs(PodHighlights) do
+                if h.Adornee == v then already = true; break end
+            end
+            if not already then
+                local h = Instance.new("Highlight")
+                h.Adornee   = v
+                h.FillColor = Color3.fromRGB(0, 150, 255)
+                h.Parent    = v
+                table.insert(PodHighlights, h)
+            end
+        end
+    end
+end
 
-print("✅ Security V5 с нормальными тогглами загружен")
-print("Тогглы с шариком, размещение ровное, дизайн как у тебя")
+local function UpdateAllESP()
+    UpdatePlrESP()
+    UpdateBeastESP()
+    UpdateExitESP()
+    UpdatePodESP()
+end
+
+-- =============================================
+-- MAIN LOOP
+-- =============================================
+task.spawn(function()
+    while true do
+        task.wait()
+
+        -- Speed
+        if IsThereChar() then
+            if T.speedEnabled then
+                LocalPlayer.Character.Humanoid.WalkSpeed = T.speedValue
+            end
+
+            -- Jump
+            if T.jumpEnabled then
+                LocalPlayer.Character.Humanoid.JumpPower = T.jumpValue
+            end
+
+            -- Fullbright
+            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if T.fullbright and not hrp:FindFirstChild("KH_FullBright") then
+                    local light = Instance.new("PointLight", hrp)
+                    light.Name       = "KH_FullBright"
+                    light.Range      = math.huge
+                    light.Brightness = 2.5
+                    Lighting.GlobalShadows = false
+                elseif not T.fullbright and hrp:FindFirstChild("KH_FullBright") then
+                    hrp.KH_FullBright:Destroy()
+                    Lighting.GlobalShadows = true
+                end
+            end
+
+            -- Beast Crawl
+            local char = LocalPlayer.Character
+            if T.beastCrawl and char:FindFirstChild("CrawlScript") then
+                char.CrawlScript.Enabled = true
+            elseif char:FindFirstChild("BeastPowers") and char:FindFirstChild("CrawlScript") then
+                char.CrawlScript.Enabled = false
+            end
+
+            -- Auto Remove Rope
+            if T.autoRemoveRope and not LocalPlayer.Character:FindFirstChild("BeastPowers") then
+                for _, v in pairs(Players:GetPlayers()) do
+                    if IsThereChar(v) and v.Character:FindFirstChild("BeastPowers") then
+                        for _, v2 in pairs(v.Character:GetDescendants()) do
+                            if v2:IsA("RopeConstraint") then v2:Destroy() end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Anti PC Error
+        if T.antiPCError then
+            pcall(function()
+                game.ReplicatedStorage.RemoteEvent:FireServer("SetPlayerMinigameResult", true)
+            end)
+        end
+
+        -- Computer ESP
+        local GotComputers = 0
+        for _, v in pairs(game.Workspace:GetChildren()) do
+            if v:FindFirstChild("MapThumbnail") then
+                for _, v2 in pairs(v:GetChildren()) do
+                    if v2.Name == "ComputerTable" and v2:FindFirstChild("Screen") then
+                        GotComputers = GotComputers + 1
+                        if T.computerESP then
+                            local found = false
+                            for _, h in pairs(PCHighlights) do
+                                if h.Adornee == v2 then
+                                    h.FillColor = v2.Screen.Color
+                                    found = true
+                                end
+                            end
+                            if not found then
+                                local h = Instance.new("Highlight")
+                                h.FillColor = v2.Screen.Color
+                                h.Adornee   = v2
+                                h.Parent    = v2
+                                table.insert(PCHighlights, h)
+                            end
+                        else
+                            clearHighlights(PCHighlights)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Auto refresh ESPs on round change
+        if GotComputers ~= Comp then
+            task.spawn(function()
+                if GotComputers == 0 then
+                    task.wait(1)
+                    UpdatePlrESP()
+                    UpdateExitESP()
+                    UpdatePodESP()
+                    UpdateBeastESP()
+                else
+                    task.wait(3)
+                    UpdatePlrESP()
+                    UpdateExitESP()
+                    UpdatePodESP()
+                    task.wait(15)
+                    UpdateBeastESP()
+                end
+            end)
+            Comp = GotComputers
+        end
+    end
+end)
+
+-- =============================================
+-- SPEED/JUMP RESET ON DISABLE (call from GUI)
+-- =============================================
+local function OnSpeedDisabled()
+    if IsThereChar() then
+        LocalPlayer.Character.Humanoid.WalkSpeed = 16
+    end
+end
+
+local function OnJumpDisabled()
+    if IsThereChar() then
+        LocalPlayer.Character.Humanoid.JumpPower = 50
+    end
+end
+
+-- =============================================
+-- PUBLIC API
+-- =============================================
+-- T.speedEnabled  = true/false
+-- T.speedValue    = number (16-128)
+-- T.jumpEnabled   = true/false
+-- T.jumpValue     = number (50-300)
+-- T.infiniteJump  = true/false
+-- T.fullbright    = true/false
+-- T.beastESP      = true/false
+-- T.playerESP     = true/false
+-- T.exitESP       = true/false
+-- T.podESP        = true/false
+-- T.computerESP   = true/false
+-- T.autoRemoveRope = true/false
+-- T.beastCrawl    = true/false
+-- T.antiPCError   = true/false
+--
+-- Call from GUI:
+--   OnSpeedDisabled()   -- when speed toggle turned off
+--   OnJumpDisabled()    -- when jump toggle turned off
+--   UpdateAllESP()      -- manual refresh button
+--   UpdateBeastESP()
+--   UpdatePlrESP()
+--   UpdateExitESP()
+--   UpdatePodESP()
