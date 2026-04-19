@@ -1,690 +1,344 @@
--- RemoteSpy Pro: Расширенный инструмент для перехвата, логирования и эксплуатации RemoteEvent и RemoteFunction
--- Автор: QANUI / Gemini
-
--- Загрузка Orion UI
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
-
--- Сервисы
+-- RemoteSpy Custom UI (No Orion, чистый Lua)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
-local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local Settings = {
     HookEnabled = false,
     MaxLogEntries = 100,
-    SaveLogsToFile = true,
-    DebugMode = true
+    SaveLogsToFile = true
 }
 
--- Таблицы для хранения данных
+-- Данные
 local Logs = {}
-local HookConnections = {}
 local RemoteList = {}
+local HookedRemotes = {}
 
--- Путь для сохранения файлов
+-- Файлы
 local SaveFolder = "RemoteSpy_Logs"
-if not isfolder(SaveFolder) then
-    makefolder(SaveFolder)
-end
+if not isfolder(SaveFolder) then makefolder(SaveFolder) end
 
--- Функция для сериализации аргументов (поддержка таблиц, Vector3, CFrame и т.д.)
-local function serializeArgs(args, depth)
-    depth = depth or 0
-    if depth > 5 then return "{...}" end -- Защита от рекурсии
-    
-    local serialized = {}
-    for i, v in ipairs(args) do
-        local t = type(v)
-        if t == "string" then
-            table.insert(serialized, string.format("%q", v))
-        elseif t == "number" or t == "boolean" then
-            table.insert(serialized, tostring(v))
-        elseif t == "nil" then
-            table.insert(serialized, "nil")
-        elseif t == "table" then
-            -- Обработка таблиц
-            local parts = {}
-            for k, val in pairs(v) do
-                local keyStr = type(k) == "string" and string.format("%q", k) or tostring(k)
-                local valStr = serializeArgs({val}, depth + 1)
-                table.insert(parts, string.format("[%s] = %s", keyStr, valStr))
-            end
-            table.insert(serialized, "{" .. table.concat(parts, ", ") .. "}")
-        elseif t == "userdata" then
-            -- Обработка специальных типов Roblox
-            if typeof(v) == "Vector3" then
-                table.insert(serialized, string.format("Vector3.new(%s, %s, %s)", v.X, v.Y, v.Z))
-            elseif typeof(v) == "CFrame" then
-                table.insert(serialized, string.format("CFrame.new(%s, %s, %s)", v.X, v.Y, v.Z))
-            elseif typeof(v) == "Color3" then
-                table.insert(serialized, string.format("Color3.fromRGB(%s, %s, %s)", math.floor(v.R*255), math.floor(v.G*255), math.floor(v.B*255)))
-            else
-                table.insert(serialized, tostring(v))
-            end
-        elseif t == "function" then
-            table.insert(serialized, "function(...)")
-        else
-            table.insert(serialized, tostring(v))
-        end
-    end
-    return table.concat(serialized, ", ")
-end
+-- GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "RemoteSpy_Custom"
+ScreenGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+ScreenGui.ResetOnSpawn = false
 
--- Функция для парсинга аргументов из строки (поддержка таблиц, Vector3 и т.д.)
-local function parseArgs(str)
-    if not str or str == "" then return {} end
-    
-    local success, result = pcall(function()
-        -- Создаем безопасное окружение для парсинга
-        local env = {
-            Vector3 = Vector3,
-            CFrame = CFrame,
-            Color3 = Color3,
-            BrickColor = BrickColor,
-            UDim2 = UDim2,
-            UDim = UDim,
-            Ray = Ray,
-            TweenInfo = TweenInfo,
-            NumberRange = NumberRange,
-            NumberSequence = NumberSequence,
-            ColorSequence = ColorSequence,
-        }
-        
-        local func, err = loadstring("return " .. str)
-        if not func then
-            func, err = loadstring("return {" .. str .. "}")
-        end
-        
-        if func then
-            setfenv(func, env)
-            local res = func()
-            if type(res) == "table" then
-                return res
-            else
-                return {res}
-            end
-        else
-            return {}
-        end
+-- Главное окно
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 500, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -250, 0.5, -200)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+-- Заголовок
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 30)
+TitleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -60, 1, 0)
+Title.Position = UDim2.new(0, 10, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "RemoteSpy Custom"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TitleBar
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -30, 0, 0)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
+CloseBtn.Parent = TitleBar
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+
+-- Вкладки
+local TabFrame = Instance.new("Frame")
+TabFrame.Size = UDim2.new(1, 0, 0, 30)
+TabFrame.Position = UDim2.new(0, 0, 0, 30)
+TabFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+TabFrame.BorderSizePixel = 0
+TabFrame.Parent = MainFrame
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Size = UDim2.new(1, 0, 1, -60)
+ContentFrame.Position = UDim2.new(0, 0, 0, 60)
+ContentFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+ContentFrame.BorderSizePixel = 0
+ContentFrame.Parent = MainFrame
+
+-- Функция создания вкладки
+local function createTab(name, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 100, 1, 0)
+    btn.Position = UDim2.new(0, #TabFrame:GetChildren() * 100, 0, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.BorderSizePixel = 0
+    btn.Text = name
+    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 12
+    btn.Parent = TabFrame
+    btn.MouseButton1Click:Connect(function()
+        for _, child in ipairs(ContentFrame:GetChildren()) do child.Visible = false end
+        callback()
     end)
-    
-    if success then
-        return result
-    else
-        return {}
-    end
+    return btn
 end
 
--- Функция для добавления записи в лог
-local function addLog(logType, remoteType, remote, args, result, stackTrace)
-    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-    local remotePath = tostring(remote)
-    local remoteName = remote.Name or "Unknown"
-    local remoteParent = remote.Parent and remote.Parent:GetFullName() or "Unknown"
-    
-    local logEntry = {
-        Timestamp = timestamp,
-        Type = remoteType,
-        Name = remoteName,
-        Path = remoteParent .. "." .. remoteName,
-        FullPath = remotePath,
-        Args = args,
-        Result = result,
-        StackTrace = stackTrace,
-        LogType = logType
-    }
-    
-    table.insert(Logs, 1, logEntry)
-    
-    -- Ограничение количества записей
-    while #Logs > Settings.MaxLogEntries do
-        table.remove(Logs)
+-- Вкладка Логи
+local LogsPage = Instance.new("ScrollingFrame")
+LogsPage.Size = UDim2.new(1, 0, 1, 0)
+LogsPage.BackgroundTransparency = 1
+LogsPage.BorderSizePixel = 0
+LogsPage.CanvasSize = UDim2.new(0, 0, 0, 0)
+LogsPage.ScrollBarThickness = 5
+LogsPage.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 60)
+LogsPage.Parent = ContentFrame
+
+local LogsList = Instance.new("UIListLayout")
+LogsList.Parent = LogsPage
+LogsList.SortOrder = Enum.SortOrder.LayoutOrder
+LogsList.Padding = UDim.new(0, 2)
+
+local LogTemplate = Instance.new("Frame")
+LogTemplate.Size = UDim2.new(1, -10, 0, 30)
+LogTemplate.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+LogTemplate.BorderSizePixel = 0
+LogTemplate.Visible = false
+
+-- Вкладка Консоль
+local ConsolePage = Instance.new("Frame")
+ConsolePage.Size = UDim2.new(1, 0, 1, 0)
+ConsolePage.BackgroundTransparency = 1
+ConsolePage.Visible = false
+ConsolePage.Parent = ContentFrame
+
+local ConsoleOutput = Instance.new("TextBox")
+ConsoleOutput.Size = UDim2.new(1, -10, 1, -50)
+ConsoleOutput.Position = UDim2.new(0, 5, 0, 5)
+ConsoleOutput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ConsoleOutput.BorderSizePixel = 0
+ConsoleOutput.Text = ""
+ConsoleOutput.TextColor3 = Color3.fromRGB(255, 255, 255)
+ConsoleOutput.Font = Enum.Font.Code
+ConsoleOutput.TextSize = 12
+ConsoleOutput.TextXAlignment = Enum.TextXAlignment.Left
+ConsoleOutput.TextYAlignment = Enum.TextYAlignment.Top
+ConsoleOutput.ClearTextOnFocus = false
+ConsoleOutput.MultiLine = true
+ConsoleOutput.Parent = ConsolePage
+
+local ConsoleInput = Instance.new("TextBox")
+ConsoleInput.Size = UDim2.new(1, -10, 0, 30)
+ConsoleInput.Position = UDim2.new(0, 5, 1, -35)
+ConsoleInput.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+ConsoleInput.BorderSizePixel = 0
+ConsoleInput.PlaceholderText = "Введите код Lua..."
+ConsoleInput.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+ConsoleInput.Text = ""
+ConsoleInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+ConsoleInput.Font = Enum.Font.Code
+ConsoleInput.TextSize = 12
+ConsoleInput.ClearTextOnFocus = false
+ConsoleInput.Parent = ConsolePage
+
+ConsoleInput.FocusLost:Connect(function(enterPressed)
+    if enterPressed then
+        local code = ConsoleInput.Text
+        ConsoleOutput.Text = ConsoleOutput.Text .. "\n> " .. code
+        local success, result = pcall(function() return loadstring(code)() end)
+        ConsoleOutput.Text = ConsoleOutput.Text .. "\n" .. (success and tostring(result or "nil") or "Ошибка: " .. tostring(result))
+        ConsoleInput.Text = ""
     end
-    
-    -- Обновление UI
-    pcall(function()
-        if LogTable then
-            local rows = {}
-            for i, entry in ipairs(Logs) do
-                local shortArgs = serializeArgs(entry.Args):sub(1, 30) .. (#serializeArgs(entry.Args) > 30 and "..." or "")
-                table.insert(rows, {
-                    Time = entry.Timestamp,
-                    Type = entry.Type,
-                    Name = entry.Name,
-                    Args = shortArgs,
-                    Index = i
-                })
-            end
-            LogTable:Refresh(rows, true)
-        end
-    end)
-    
-    -- Сохранение в файл
-    if Settings.SaveLogsToFile then
-        local fileName = SaveFolder .. "/" .. game.PlaceId .. "_" .. os.date("%Y%m%d") .. ".txt"
-        local logString = string.format("[%s] [%s] %s.%s(%s)\n", 
-            timestamp, remoteType, remoteParent, remoteName, serializeArgs(args))
-        if result ~= nil then
-            logString = logString .. "    Result: " .. serializeArgs({result}) .. "\n"
-        end
-        if stackTrace then
-            logString = logString .. "    Stack: " .. stackTrace .. "\n"
-        end
-        appendfile(fileName, logString)
+end)
+
+-- Вкладка Обзор
+local RemotesPage = Instance.new("ScrollingFrame")
+RemotesPage.Size = UDim2.new(1, 0, 1, 0)
+RemotesPage.BackgroundTransparency = 1
+RemotesPage.BorderSizePixel = 0
+RemotesPage.CanvasSize = UDim2.new(0, 0, 0, 0)
+RemotesPage.ScrollBarThickness = 5
+RemotesPage.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 60)
+RemotesPage.Visible = false
+RemotesPage.Parent = ContentFrame
+
+local RemotesList = Instance.new("UIListLayout")
+RemotesList.Parent = RemotesPage
+RemotesList.SortOrder = Enum.SortOrder.LayoutOrder
+RemotesList.Padding = UDim.new(0, 2)
+
+-- Табы
+createTab("Логи", function() LogsPage.Visible = true; ConsolePage.Visible = false; RemotesPage.Visible = false end)
+createTab("Консоль", function() LogsPage.Visible = false; ConsolePage.Visible = true; RemotesPage.Visible = false end)
+createTab("Обзор", function() LogsPage.Visible = false; ConsolePage.Visible = false; RemotesPage.Visible = true; refreshRemotesList() end)
+
+-- Кнопка очистки логов
+local ClearLogsBtn = Instance.new("TextButton")
+ClearLogsBtn.Size = UDim2.new(0, 80, 0, 25)
+ClearLogsBtn.Position = UDim2.new(1, -85, 0, 5)
+ClearLogsBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+ClearLogsBtn.BorderSizePixel = 0
+ClearLogsBtn.Text = "Очистить"
+ClearLogsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClearLogsBtn.Font = Enum.Font.Gotham
+ClearLogsBtn.TextSize = 12
+ClearLogsBtn.Parent = LogsPage
+ClearLogsBtn.MouseButton1Click:Connect(function()
+    for _, child in ipairs(LogsPage:GetChildren()) do
+        if child:IsA("Frame") and child ~= LogTemplate then child:Destroy() end
     end
+    Logs = {}
+end)
+
+-- Функции
+function addLog(message)
+    local newLog = LogTemplate:Clone()
+    newLog.Visible = true
+    newLog.Parent = LogsPage
+    newLog.LayoutOrder = #LogsPage:GetChildren()
     
-    return logEntry
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -10, 1, 0)
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = message
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.Font = Enum.Font.Code
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = newLog
+    
+    LogsPage.CanvasSize = UDim2.new(0, 0, 0, LogsList.AbsoluteContentSize.Y + 5)
 end
 
--- Функция для перехвата RemoteEvent:FireServer
-local function hookFireServer(originalFunc, remote)
-    return function(...)
-        local args = {...}
-        local stackTrace = Settings.DebugMode and debug.traceback(nil, 2) or nil
-        
-        -- Логирование
-        if Settings.HookEnabled then
-            addLog("FireServer", "RemoteEvent", remote, args, nil, stackTrace)
-        end
-        
-        -- Передача оригинальному серверу
-        return originalFunc(remote, ...)
-    end
-end
-
--- Функция для перехвата RemoteFunction:InvokeServer
-local function hookInvokeServer(originalFunc, remote)
-    return function(...)
-        local args = {...}
-        local stackTrace = Settings.DebugMode and debug.traceback(nil, 2) or nil
-        
-        -- Вызов оригинального метода
-        local results = {originalFunc(remote, ...)}
-        
-        -- Логирование
-        if Settings.HookEnabled then
-            local result = #results == 1 and results[1] or results
-            addLog("InvokeServer", "RemoteFunction", remote, args, result, stackTrace)
-        end
-        
-        return unpack(results)
-    end
-end
-
--- Функция для сканирования всех RemoteEvent и RemoteFunction в игре
-local function scanRemotes()
+function scanRemotes()
     RemoteList = {}
-    local services = {
-        game:GetService("ReplicatedStorage"),
-        game:GetService("Players"),
-        game:GetService("Workspace"),
-        game:GetService("Lighting"),
-        game:GetService("StarterGui"),
-        game:GetService("StarterPlayer"),
-        game:GetService("SoundService"),
-        game:GetService("Chat"),
-        game:GetService("ServerStorage"),
-        game:GetService("ServerScriptService")
-    }
-    
+    local services = {game.ReplicatedStorage, game.Players, workspace, game.Lighting}
     for _, service in ipairs(services) do
         pcall(function()
             for _, obj in ipairs(service:GetDescendants()) do
                 if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                    table.insert(RemoteList, {
-                        Object = obj,
-                        Name = obj.Name,
-                        Path = obj:GetFullName(),
-                        Type = obj.ClassName
-                    })
+                    table.insert(RemoteList, obj)
                 end
             end
         end)
     end
-    
     return RemoteList
 end
 
--- Функция для включения хуков
-local function enableHooks()
-    if HookConnections and #HookConnections > 0 then return end
-    
-    Settings.HookEnabled = true
-    
-    -- Хукаем все существующие RemoteEvent и RemoteFunction
-    for _, remoteData in ipairs(RemoteList) do
-        local remote = remoteData.Object
-        if remote:IsA("RemoteEvent") then
-            local oldHook
-            oldHook = hookfunction(remote.FireServer, function(...)
-                return hookFireServer(oldHook or remote.FireServer, remote)(...)
-            end)
-            HookConnections[remote] = oldHook
-        elseif remote:IsA("RemoteFunction") then
-            local oldHook
-            oldHook = hookfunction(remote.InvokeServer, function(...)
-                return hookInvokeServer(oldHook or remote.InvokeServer, remote)(...)
-            end)
-            HookConnections[remote] = oldHook
-        end
+function refreshRemotesList()
+    for _, child in ipairs(RemotesPage:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
     end
-    
-    -- Хукаем новые ремоуты при их создании
-    local function hookNewRemote(remote)
-        if remote:IsA("RemoteEvent") then
-            local oldHook
-            oldHook = hookfunction(remote.FireServer, function(...)
-                return hookFireServer(oldHook or remote.FireServer, remote)(...)
-            end)
-            HookConnections[remote] = oldHook
-        elseif remote:IsA("RemoteFunction") then
-            local oldHook
-            oldHook = hookfunction(remote.InvokeServer, function(...)
-                return hookInvokeServer(oldHook or remote.InvokeServer, remote)(...)
-            end)
-            HookConnections[remote] = oldHook
-        end
-    end
-    
-    -- Наблюдаем за новыми объектами
-    local services = {game:GetService("ReplicatedStorage"), game:GetService("Players"), game:GetService("Workspace")}
-    for _, service in ipairs(services) do
-        service.DescendantAdded:Connect(function(child)
-            if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-                hookNewRemote(child)
-            end
+    local remotes = scanRemotes()
+    for i, remote in ipairs(remotes) do
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, -10, 0, 25)
+        frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        frame.BorderSizePixel = 0
+        frame.Parent = RemotesPage
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -60, 1, 0)
+        label.Position = UDim2.new(0, 5, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Text = remote:GetFullName()
+        label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        label.Font = Enum.Font.Code
+        label.TextSize = 11
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = frame
+        
+        local execBtn = Instance.new("TextButton")
+        execBtn.Size = UDim2.new(0, 50, 1, 0)
+        execBtn.Position = UDim2.new(1, -55, 0, 0)
+        execBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        execBtn.BorderSizePixel = 0
+        execBtn.Text = "Exec"
+        execBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        execBtn.Font = Enum.Font.Gotham
+        execBtn.TextSize = 11
+        execBtn.Parent = frame
+        execBtn.MouseButton1Click:Connect(function()
+            -- Выполнение с запросом аргументов через консоль
+            ConsolePage.Visible = true
+            LogsPage.Visible = false
+            RemotesPage.Visible = false
+            ConsoleInput.Text = 'local remote = game:GetService("' .. remote:GetFullName() .. '")\n-- remote:FireServer(...) или remote:InvokeServer(...)'
         end)
     end
-    
-    OrionLib:MakeNotification({
-        Name = "RemoteSpy",
-        Content = "Перехват ремоутов включен!",
-        Time = 3
-    })
+    RemotesPage.CanvasSize = UDim2.new(0, 0, 0, RemotesList.AbsoluteContentSize.Y + 5)
 end
 
--- Функция для отключения хуков
-local function disableHooks()
-    Settings.HookEnabled = false
-    OrionLib:MakeNotification({
-        Name = "RemoteSpy",
-        Content = "Перехват ремоутов отключен!",
-        Time = 3
-    })
+-- Перехват
+local oldFireServer = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
+    if Settings.HookEnabled and not HookedRemotes[self] then
+        HookedRemotes[self] = true
+        addLog(string.format("[FireServer] %s (%s)", self:GetFullName(), serializeArgs({...})))
+    end
+    return oldFireServer(self, ...)
+end)
+
+local oldInvokeServer = hookfunction(Instance.new("RemoteFunction").InvokeServer, function(self, ...)
+    local result = oldInvokeServer(self, ...)
+    if Settings.HookEnabled and not HookedRemotes[self] then
+        HookedRemotes[self] = true
+        addLog(string.format("[InvokeServer] %s (%s) -> %s", self:GetFullName(), serializeArgs({...}), tostring(result)))
+    end
+    return result
+end)
+
+-- Функция сериализации
+function serializeArgs(args)
+    local parts = {}
+    for i, v in ipairs(args) do
+        local t = type(v)
+        if t == "string" then parts[i] = string.format("%q", v)
+        elseif t == "number" or t == "boolean" then parts[i] = tostring(v)
+        elseif t == "nil" then parts[i] = "nil"
+        elseif t == "userdata" then
+            if typeof(v) == "Vector3" then parts[i] = string.format("Vector3.new(%s,%s,%s)", v.X, v.Y, v.Z)
+            else parts[i] = tostring(v) end
+        else parts[i] = tostring(v) end
+    end
+    return table.concat(parts, ", ")
 end
 
--- Создание главного окна
-local Window = OrionLib:MakeWindow({
-    Name = "RemoteSpy Pro | Advanced",
-    HidePremium = false,
-    SaveConfig = true,
-    ConfigFolder = "RemoteSpy_Config",
-    IntroEnabled = true,
-    IntroText = "RemoteSpy Pro"
-})
-
--- Вкладки
-local LogsTab = Window:MakeTab({ Name = "Логи", Icon = "rbxassetid://4483345998" })
-local RemoteListTab = Window:MakeTab({ Name = "Обзор", Icon = "rbxassetid://4483345998" })
-local ConsoleTab = Window:MakeTab({ Name = "Консоль", Icon = "rbxassetid://4483345998" })
-local SettingsTab = Window:MakeTab({ Name = "Настройки", Icon = "rbxassetid://4483345998" })
-
--- Переменные для UI
-local LogTable
-local ConsoleInput
-local ConsoleOutput
-local SelectedLog = nil
-local RemoteDropdown
-local RemoteExecuteArgs
-local RemoteListTable
-local ConsoleHistory = {}
-
--- Вкладка "Логи"
-LogsTab:AddSection({ Name = "Перехваченные вызовы" })
-
--- Кнопки управления
-LogsTab:AddToggle({
-    Name = "Включить перехват",
-    Default = false,
-    Callback = function(val)
-        if val then
-            enableHooks()
-        else
-            disableHooks()
-        end
-    end
-})
-
-LogsTab:AddButton({
-    Name = "Очистить логи",
-    Callback = function()
-        Logs = {}
-        if LogTable then
-            LogTable:Refresh({}, true)
-        end
-    end
-})
-
-LogsTab:AddButton({
-    Name = "Сканировать ремоуты",
-    Callback = function()
-        local count = #scanRemotes()
-        OrionLib:MakeNotification({
-            Name = "Сканирование",
-            Content = "Найдено ремоутов: " .. count,
-            Time = 3
-        })
-    end
-})
-
--- Таблица логов
-LogTable = LogsTab:AddTable({
-    Name = "История вызовов",
-    Columns = {"Время", "Тип", "Название", "Аргументы"},
-    Callback = function(index)
-        if index and Logs[index] then
-            SelectedLog = Logs[index]
-        end
-    end
-})
-
--- Детали выбранного лога
-LogsTab:AddSection({ Name = "Детали вызова" })
-
-local LogDetailsLabel = LogsTab:AddLabel("Выберите запись в таблице")
-
-LogsTab:AddButton({
-    Name = "Выполнить с оригинальными аргументами",
-    Callback = function()
-        if not SelectedLog then
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Сначала выберите запись в таблице!",
-                Time = 3
-            })
-            return
-        end
-        
-        local remote = nil
-        pcall(function()
-            remote = game:GetService(SelectedLog.FullPath)
-        end)
-        
-        if not remote then
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Ремоут не найден: " .. SelectedLog.FullPath,
-                Time = 3
-            })
-            return
-        end
-        
-        local success, result = pcall(function()
-            if SelectedLog.Type == "RemoteEvent" then
-                remote:FireServer(unpack(SelectedLog.Args))
-                return "Выполнено"
-            else
-                return remote:InvokeServer(unpack(SelectedLog.Args))
-            end
-        end)
-        
-        OrionLib:MakeNotification({
-            Name = "Результат",
-            Content = success and ("Успешно: " .. tostring(result)) or ("Ошибка: " .. tostring(result)),
-            Time = 5
-        })
-    end
-})
-
--- Поле для модифицированных аргументов
-local ModifiedArgsBox = LogsTab:AddTextbox({
-    Name = "Модифицированные аргументы",
-    Default = "",
-    TextDisappear = false,
-    Callback = function(val) end
-})
-
-LogsTab:AddButton({
-    Name = "Выполнить с модифицированными аргументами",
-    Callback = function()
-        if not SelectedLog then
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Сначала выберите запись в таблице!",
-                Time = 3
-            })
-            return
-        end
-        
-        local remote = nil
-        pcall(function()
-            remote = game:GetService(SelectedLog.FullPath)
-        end)
-        
-        if not remote then
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Ремоут не найден: " .. SelectedLog.FullPath,
-                Time = 3
-            })
-            return
-        end
-        
-        local args = parseArgs(ModifiedArgsBox.Value)
-        local success, result = pcall(function()
-            if SelectedLog.Type == "RemoteEvent" then
-                remote:FireServer(unpack(args))
-                return "Выполнено"
-            else
-                return remote:InvokeServer(unpack(args))
-            end
-        end)
-        
-        OrionLib:MakeNotification({
-            Name = "Результат",
-            Content = success and ("Успешно: " .. tostring(result)) or ("Ошибка: " .. tostring(result)),
-            Time = 5
-        })
-    end
-})
-
--- Вкладка "Обзор" (список всех ремоутов)
-RemoteListTab:AddSection({ Name = "Все RemoteEvent и RemoteFunction" })
-
-RemoteListTab:AddButton({
-    Name = "Обновить список",
-    Callback = function()
-        local remotes = scanRemotes()
-        local rows = {}
-        for _, remoteData in ipairs(remotes) do
-            table.insert(rows, {
-                Name = remoteData.Name,
-                Type = remoteData.Type,
-                Path = remoteData.Path
-            })
-        end
-        if RemoteListTable then
-            RemoteListTable:Refresh(rows, true)
-        end
-        OrionLib:MakeNotification({
-            Name = "Обновлено",
-            Content = "Найдено ремоутов: " .. #remotes,
-            Time = 3
-        })
-    end
-})
-
-RemoteListTable = RemoteListTab:AddTable({
-    Name = "Список ремоутов",
-    Columns = {"Название", "Тип", "Путь"},
-    Callback = function(index)
-        local remotes = RemoteList
-        if remotes and remotes[index] then
-            local remoteData = remotes[index]
-            SelectedRemote = remoteData.Object
-            
-            OrionLib:MakeNotification({
-                Name = "Выбрано",
-                Content = remoteData.Name .. " (" .. remoteData.Type .. ")",
-                Time = 2
-            })
-        end
-    end
-})
-
-RemoteListTab:AddSection({ Name = "Выполнение ремоута" })
-
-RemoteExecuteArgs = RemoteListTab:AddTextbox({
-    Name = "Аргументы",
-    Default = "",
-    TextDisappear = false,
-    Callback = function(val) end
-})
-
-RemoteListTab:AddButton({
-    Name = "Выполнить выбранный ремоут",
-    Callback = function()
-        if not SelectedRemote then
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Сначала выберите ремоут в таблице!",
-                Time = 3
-            })
-            return
-        end
-        
-        local args = parseArgs(RemoteExecuteArgs.Value)
-        local success, result = pcall(function()
-            if SelectedRemote:IsA("RemoteEvent") then
-                SelectedRemote:FireServer(unpack(args))
-                return "Выполнено"
-            else
-                return SelectedRemote:InvokeServer(unpack(args))
-            end
-        end)
-        
-        OrionLib:MakeNotification({
-            Name = "Результат",
-            Content = success and ("Успешно: " .. tostring(result)) or ("Ошибка: " .. tostring(result)),
-            Time = 5
-        })
-    end
-})
-
--- Вкладка "Консоль"
-ConsoleTab:AddSection({ Name = "Мини-консоль" })
-
-ConsoleInput = ConsoleTab:AddTextbox({
-    Name = "Ввод команды",
-    Default = "",
-    TextDisappear = true,
-    Callback = function(val)
-        if val == "" then return end
-        
-        table.insert(ConsoleHistory, "> " .. val)
-        
-        local success, result = pcall(function()
-            return loadstring(val)()
-        end)
-        
-        local output = success and tostring(result or "nil") or "Ошибка: " .. tostring(result)
-        table.insert(ConsoleHistory, output)
-        
-        -- Ограничение истории
-        while #ConsoleHistory > 50 do
-            table.remove(ConsoleHistory, 1)
-        end
-        
-        if ConsoleOutputLabel then
-            ConsoleOutputLabel:Set(table.concat(ConsoleHistory, "\n"))
-        end
-    end
-})
-
-ConsoleOutputLabel = ConsoleTab:AddLabel("Готов к работе...")
-
-ConsoleTab:AddButton({
-    Name = "Очистить консоль",
-    Callback = function()
-        ConsoleHistory = {}
-        if ConsoleOutputLabel then
-            ConsoleOutputLabel:Set("Готов к работе...")
-        end
-    end
-})
-
-ConsoleTab:AddButton({
-    Name = "Выполнить код из буфера",
-    Callback = function()
-        local success, result = pcall(function()
-            return loadstring(getclipboard())()
-        end)
-        
-        if success then
-            OrionLib:MakeNotification({
-                Name = "Успешно",
-                Content = "Код выполнен!",
-                Time = 3
-            })
-        else
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = tostring(result),
-                Time = 5
-            })
-        end
-    end
-})
-
--- Вкладка "Настройки"
-SettingsTab:AddSection({ Name = "Настройки RemoteSpy" })
-
-SettingsTab:AddSlider({
-    Name = "Максимум записей в логе",
-    Min = 10, Max = 500, Default = 100, Increment = 10,
-    ValueName = "записей",
-    Callback = function(val)
-        Settings.MaxLogEntries = val
-    end
-})
-
-SettingsTab:AddToggle({
-    Name = "Сохранять логи в файл",
-    Default = true,
-    Callback = function(val)
-        Settings.SaveLogsToFile = val
-    end
-})
-
-SettingsTab:AddToggle({
-    Name = "Режим отладки (стек-трейс)",
-    Default = true,
-    Callback = function(val)
-        Settings.DebugMode = val
-    end
-})
-
-SettingsTab:AddButton({
-    Name = "Открыть папку с логами",
-    Callback = function()
-        OrionLib:MakeNotification({
-            Name = "Папка",
-            Content = "Логи сохраняются в: " .. SaveFolder,
-            Time = 5
-        })
-    end
-})
+-- Кнопка включения перехвата
+local ToggleHookBtn = Instance.new("TextButton")
+ToggleHookBtn.Size = UDim2.new(0, 100, 0, 25)
+ToggleHookBtn.Position = UDim2.new(0, 5, 0, 5)
+ToggleHookBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+ToggleHookBtn.BorderSizePixel = 0
+ToggleHookBtn.Text = "Start Hook"
+ToggleHookBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleHookBtn.Font = Enum.Font.GothamBold
+ToggleHookBtn.TextSize = 12
+ToggleHookBtn.Parent = LogsPage
+ToggleHookBtn.MouseButton1Click:Connect(function()
+    Settings.HookEnabled = not Settings.HookEnabled
+    ToggleHookBtn.Text = Settings.HookEnabled and "Stop Hook" or "Start Hook"
+    ToggleHookBtn.BackgroundColor3 = Settings.HookEnabled and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(0, 100, 200)
+    HookedRemotes = {}
+    addLog(Settings.HookEnabled and "=== Hook Enabled ===" or "=== Hook Disabled ===")
+end)
 
 -- Инициализация
-scanRemotes()
-OrionLib:Init()
-
-OrionLib:MakeNotification({
-    Name = "RemoteSpy Pro",
-    Content = "Скрипт загружен! Используйте вкладки для работы.",
-    Time = 5
-})
+addLog("RemoteSpy Custom loaded. Use Start Hook to begin.")
