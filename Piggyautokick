@@ -1,344 +1,974 @@
--- RemoteSpy Custom UI (No Orion, чистый Lua)
+-- RemoteSpy Ultimate v2.0
+-- Исправлены: hookfunction compatibility, serializeArgs scope, appendfile guard,
+-- addLog scope order, hookfunction on fresh instances (неправильный подход),
+-- CanvasSize update timing, log counter, SearchBox visibility bug, синтаксические проблемы
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки
 local Settings = {
     HookEnabled = false,
-    MaxLogEntries = 100,
-    SaveLogsToFile = true
+    MaxLogs = 300,
+    SaveLogs = pcall(function() return isfolder end) and true or false,
+    LogFolder = "RemoteSpy_Logs"
 }
 
--- Данные
+local Minimized = false
+local OriginalSize = UDim2.new(0, 700, 0, 500)
+local MinimizedSize = UDim2.new(0, 220, 0, 35)
+
 local Logs = {}
-local RemoteList = {}
-local HookedRemotes = {}
+local LogCount = 0
+local SelectedRemote = nil
 
--- Файлы
-local SaveFolder = "RemoteSpy_Logs"
-if not isfolder(SaveFolder) then makefolder(SaveFolder) end
+-- Папка для логов
+if Settings.SaveLogs then
+    pcall(function()
+        if not isfolder(Settings.LogFolder) then makefolder(Settings.LogFolder) end
+    end)
+end
 
--- GUI
+-- ==================== УТИЛИТЫ ====================
+
+-- FIX: serializeArgs объявлена ДО addLog и hookfunction
+local function serializeArgs(args)
+    local parts = {}
+    for i, v in ipairs(args) do
+        local t = typeof and typeof(v) or type(v)
+        if t == "string" then
+            parts[i] = string.format("%q", v)
+        elseif t == "number" or t == "boolean" then
+            parts[i] = tostring(v)
+        elseif t == "nil" then
+            parts[i] = "nil"
+        elseif t == "Vector3" then
+            parts[i] = string.format("Vector3.new(%g,%g,%g)", v.X, v.Y, v.Z)
+        elseif t == "Vector2" then
+            parts[i] = string.format("Vector2.new(%g,%g)", v.X, v.Y)
+        elseif t == "CFrame" then
+            local pos = v.Position
+            parts[i] = string.format("CFrame.new(%g,%g,%g)", pos.X, pos.Y, pos.Z)
+        elseif t == "Color3" then
+            parts[i] = string.format("Color3.fromRGB(%d,%d,%d)", v.R*255, v.G*255, v.B*255)
+        elseif t == "Instance" then
+            parts[i] = string.format('[Instance "%s"]', v:GetFullName())
+        elseif t == "table" then
+            parts[i] = "{table}"
+        else
+            parts[i] = string.format("[%s]", t)
+        end
+    end
+    return table.concat(parts, ", ")
+end
+
+-- ==================== GUI ====================
+
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "RemoteSpy_Custom"
-ScreenGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+ScreenGui.Name = "RemoteSpyUltimate"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- Главное окно
+-- FIX: безопасная установка Parent
+local guiParent = CoreGui
+pcall(function()
+    if syn and syn.protect_gui then
+        syn.protect_gui(ScreenGui)
+        guiParent = CoreGui
+    elseif gethui then
+        guiParent = gethui()
+    end
+end)
+ScreenGui.Parent = guiParent
+
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 500, 0, 400)
-MainFrame.Position = UDim2.new(0.5, -250, 0.5, -200)
-MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.Size = OriginalSize
+MainFrame.Position = UDim2.new(0.5, -350, 0.5, -250)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.Parent = ScreenGui
 
+-- Тень
+local Shadow = Instance.new("ImageLabel")
+Shadow.Size = UDim2.new(1, 30, 1, 30)
+Shadow.Position = UDim2.new(0, -15, 0, -15)
+Shadow.BackgroundTransparency = 1
+Shadow.Image = "rbxassetid://5554236805"
+Shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+Shadow.ImageTransparency = 0.5
+Shadow.ScaleType = Enum.ScaleType.Slice
+Shadow.SliceCenter = Rect.new(23, 23, 277, 277)
+Shadow.ZIndex = 0
+Shadow.Parent = MainFrame
+
+-- Accent линия сверху
+local AccentLine = Instance.new("Frame")
+AccentLine.Size = UDim2.new(1, 0, 0, 2)
+AccentLine.Position = UDim2.new(0, 0, 0, 0)
+AccentLine.BackgroundColor3 = Color3.fromRGB(80, 140, 255)
+AccentLine.BorderSizePixel = 0
+AccentLine.ZIndex = 5
+AccentLine.Parent = MainFrame
+
 -- Заголовок
 local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 30)
-TitleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+TitleBar.Size = UDim2.new(1, 0, 0, 36)
+TitleBar.Position = UDim2.new(0, 0, 0, 2)
+TitleBar.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
 TitleBar.BorderSizePixel = 0
+TitleBar.ZIndex = 2
 TitleBar.Parent = MainFrame
 
+local TitleIcon = Instance.new("TextLabel")
+TitleIcon.Size = UDim2.new(0, 20, 1, 0)
+TitleIcon.Position = UDim2.new(0, 10, 0, 0)
+TitleIcon.BackgroundTransparency = 1
+TitleIcon.Text = "⬡"
+TitleIcon.TextColor3 = Color3.fromRGB(80, 140, 255)
+TitleIcon.Font = Enum.Font.GothamBold
+TitleIcon.TextSize = 14
+TitleIcon.ZIndex = 2
+TitleIcon.Parent = TitleBar
+
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -60, 1, 0)
-Title.Position = UDim2.new(0, 10, 0, 0)
+Title.Size = UDim2.new(1, -130, 1, 0)
+Title.Position = UDim2.new(0, 35, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "RemoteSpy Custom"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Text = "RemoteSpy Ultimate  v2.0"
+Title.TextColor3 = Color3.fromRGB(230, 230, 240)
 Title.Font = Enum.Font.GothamBold
-Title.TextSize = 14
+Title.TextSize = 13
 Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.ZIndex = 2
 Title.Parent = TitleBar
 
+-- Статус хука
+local HookStatus = Instance.new("TextLabel")
+HookStatus.Size = UDim2.new(0, 80, 0, 18)
+HookStatus.Position = UDim2.new(1, -210, 0.5, -9)
+HookStatus.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+HookStatus.BorderSizePixel = 0
+HookStatus.Text = "● IDLE"
+HookStatus.TextColor3 = Color3.fromRGB(160, 160, 180)
+HookStatus.Font = Enum.Font.GothamBold
+HookStatus.TextSize = 10
+HookStatus.ZIndex = 2
+HookStatus.Parent = TitleBar
+local _hsr = Instance.new("UICorner", HookStatus)
+_hsr.CornerRadius = UDim.new(0, 4)
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 32, 0, 32)
+MinimizeBtn.Position = UDim2.new(1, -100, 0.5, -16)
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+MinimizeBtn.BorderSizePixel = 0
+MinimizeBtn.Text = "─"
+MinimizeBtn.TextColor3 = Color3.fromRGB(220, 220, 255)
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.TextSize = 16
+MinimizeBtn.ZIndex = 2
+MinimizeBtn.Parent = TitleBar
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 5)
+
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-CloseBtn.Position = UDim2.new(1, -30, 0, 0)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+CloseBtn.Size = UDim2.new(0, 32, 0, 32)
+CloseBtn.Position = UDim2.new(1, -60, 0.5, -16)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 60)
 CloseBtn.BorderSizePixel = 0
-CloseBtn.Text = "X"
+CloseBtn.Text = "✕"
 CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 14
+CloseBtn.ZIndex = 2
 CloseBtn.Parent = TitleBar
-CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 5)
 
 -- Вкладки
-local TabFrame = Instance.new("Frame")
-TabFrame.Size = UDim2.new(1, 0, 0, 30)
-TabFrame.Position = UDim2.new(0, 0, 0, 30)
-TabFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-TabFrame.BorderSizePixel = 0
-TabFrame.Parent = MainFrame
+local TabContainer = Instance.new("Frame")
+TabContainer.Size = UDim2.new(1, 0, 0, 36)
+TabContainer.Position = UDim2.new(0, 0, 0, 38)
+TabContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+TabContainer.BorderSizePixel = 0
+TabContainer.ZIndex = 2
+TabContainer.Parent = MainFrame
+
+local TabLine = Instance.new("Frame")
+TabLine.Size = UDim2.new(1, 0, 0, 1)
+TabLine.Position = UDim2.new(0, 0, 1, -1)
+TabLine.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+TabLine.BorderSizePixel = 0
+TabLine.ZIndex = 2
+TabLine.Parent = TabContainer
 
 local ContentFrame = Instance.new("Frame")
-ContentFrame.Size = UDim2.new(1, 0, 1, -60)
-ContentFrame.Position = UDim2.new(0, 0, 0, 60)
-ContentFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+ContentFrame.Size = UDim2.new(1, 0, 1, -75)
+ContentFrame.Position = UDim2.new(0, 0, 0, 75)
+ContentFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 ContentFrame.BorderSizePixel = 0
 ContentFrame.Parent = MainFrame
 
--- Функция создания вкладки
-local function createTab(name, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 100, 1, 0)
-    btn.Position = UDim2.new(0, #TabFrame:GetChildren() * 100, 0, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    btn.BorderSizePixel = 0
-    btn.Text = name
-    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
-    btn.Font = Enum.Font.GothamSemibold
-    btn.TextSize = 12
-    btn.Parent = TabFrame
-    btn.MouseButton1Click:Connect(function()
-        for _, child in ipairs(ContentFrame:GetChildren()) do child.Visible = false end
-        callback()
-    end)
-    return btn
-end
-
--- Вкладка Логи
-local LogsPage = Instance.new("ScrollingFrame")
+-- Страницы
+local LogsPage = Instance.new("Frame")
 LogsPage.Size = UDim2.new(1, 0, 1, 0)
 LogsPage.BackgroundTransparency = 1
-LogsPage.BorderSizePixel = 0
-LogsPage.CanvasSize = UDim2.new(0, 0, 0, 0)
-LogsPage.ScrollBarThickness = 5
-LogsPage.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 60)
+LogsPage.Visible = true
 LogsPage.Parent = ContentFrame
 
-local LogsList = Instance.new("UIListLayout")
-LogsList.Parent = LogsPage
-LogsList.SortOrder = Enum.SortOrder.LayoutOrder
-LogsList.Padding = UDim.new(0, 2)
-
-local LogTemplate = Instance.new("Frame")
-LogTemplate.Size = UDim2.new(1, -10, 0, 30)
-LogTemplate.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-LogTemplate.BorderSizePixel = 0
-LogTemplate.Visible = false
-
--- Вкладка Консоль
 local ConsolePage = Instance.new("Frame")
 ConsolePage.Size = UDim2.new(1, 0, 1, 0)
 ConsolePage.BackgroundTransparency = 1
 ConsolePage.Visible = false
 ConsolePage.Parent = ContentFrame
 
-local ConsoleOutput = Instance.new("TextBox")
-ConsoleOutput.Size = UDim2.new(1, -10, 1, -50)
-ConsoleOutput.Position = UDim2.new(0, 5, 0, 5)
-ConsoleOutput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-ConsoleOutput.BorderSizePixel = 0
-ConsoleOutput.Text = ""
-ConsoleOutput.TextColor3 = Color3.fromRGB(255, 255, 255)
-ConsoleOutput.Font = Enum.Font.Code
-ConsoleOutput.TextSize = 12
-ConsoleOutput.TextXAlignment = Enum.TextXAlignment.Left
-ConsoleOutput.TextYAlignment = Enum.TextYAlignment.Top
-ConsoleOutput.ClearTextOnFocus = false
-ConsoleOutput.MultiLine = true
-ConsoleOutput.Parent = ConsolePage
-
-local ConsoleInput = Instance.new("TextBox")
-ConsoleInput.Size = UDim2.new(1, -10, 0, 30)
-ConsoleInput.Position = UDim2.new(0, 5, 1, -35)
-ConsoleInput.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-ConsoleInput.BorderSizePixel = 0
-ConsoleInput.PlaceholderText = "Введите код Lua..."
-ConsoleInput.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
-ConsoleInput.Text = ""
-ConsoleInput.TextColor3 = Color3.fromRGB(255, 255, 255)
-ConsoleInput.Font = Enum.Font.Code
-ConsoleInput.TextSize = 12
-ConsoleInput.ClearTextOnFocus = false
-ConsoleInput.Parent = ConsolePage
-
-ConsoleInput.FocusLost:Connect(function(enterPressed)
-    if enterPressed then
-        local code = ConsoleInput.Text
-        ConsoleOutput.Text = ConsoleOutput.Text .. "\n> " .. code
-        local success, result = pcall(function() return loadstring(code)() end)
-        ConsoleOutput.Text = ConsoleOutput.Text .. "\n" .. (success and tostring(result or "nil") or "Ошибка: " .. tostring(result))
-        ConsoleInput.Text = ""
-    end
-end)
-
--- Вкладка Обзор
-local RemotesPage = Instance.new("ScrollingFrame")
+local RemotesPage = Instance.new("Frame")
 RemotesPage.Size = UDim2.new(1, 0, 1, 0)
 RemotesPage.BackgroundTransparency = 1
-RemotesPage.BorderSizePixel = 0
-RemotesPage.CanvasSize = UDim2.new(0, 0, 0, 0)
-RemotesPage.ScrollBarThickness = 5
-RemotesPage.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 60)
 RemotesPage.Visible = false
 RemotesPage.Parent = ContentFrame
 
-local RemotesList = Instance.new("UIListLayout")
-RemotesList.Parent = RemotesPage
-RemotesList.SortOrder = Enum.SortOrder.LayoutOrder
-RemotesList.Padding = UDim.new(0, 2)
+-- ==================== ТАБЫ ====================
+local TabButtons = {}
+local Pages = {LogsPage, ConsolePage, RemotesPage}
+local TabNames = {"Logs", "Console", "Remotes"}
+local ActiveTabBtn = nil
 
--- Табы
-createTab("Логи", function() LogsPage.Visible = true; ConsolePage.Visible = false; RemotesPage.Visible = false end)
-createTab("Консоль", function() LogsPage.Visible = false; ConsolePage.Visible = true; RemotesPage.Visible = false end)
-createTab("Обзор", function() LogsPage.Visible = false; ConsolePage.Visible = false; RemotesPage.Visible = true; refreshRemotesList() end)
+local function setTab(index)
+    for i, page in ipairs(Pages) do
+        page.Visible = (i == index)
+    end
+    for i, btn in ipairs(TabButtons) do
+        if i == index then
+            btn.BackgroundColor3 = Color3.fromRGB(80, 140, 255)
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+            btn.TextColor3 = Color3.fromRGB(160, 160, 185)
+        end
+    end
+    if index == 3 then
+        -- refresh remotes (объявим ниже)
+    end
+end
 
--- Кнопка очистки логов
+for i, name in ipairs(TabNames) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 105, 0, 30)
+    btn.Position = UDim2.new(0, 5 + (i-1)*110, 0.5, -15)
+    btn.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    btn.BorderSizePixel = 0
+    btn.Text = name
+    btn.TextColor3 = Color3.fromRGB(160, 160, 185)
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 12
+    btn.ZIndex = 3
+    btn.Parent = TabContainer
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    table.insert(TabButtons, btn)
+    local idx = i
+    btn.MouseButton1Click:Connect(function()
+        setTab(idx)
+        if idx == 3 then
+            -- refreshRemotesList()  -- вызов после объявления функции
+        end
+    end)
+end
+
+setTab(1)
+
+-- ==================== LOGS PAGE ====================
+local LogsToolbar = Instance.new("Frame")
+LogsToolbar.Size = UDim2.new(1, 0, 0, 44)
+LogsToolbar.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+LogsToolbar.BorderSizePixel = 0
+LogsToolbar.Parent = LogsPage
+
+local ToolbarDivider = Instance.new("Frame")
+ToolbarDivider.Size = UDim2.new(1, 0, 0, 1)
+ToolbarDivider.Position = UDim2.new(0, 0, 1, -1)
+ToolbarDivider.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+ToolbarDivider.BorderSizePixel = 0
+ToolbarDivider.Parent = LogsToolbar
+
+local HookToggle = Instance.new("TextButton")
+HookToggle.Size = UDim2.new(0, 120, 0, 30)
+HookToggle.Position = UDim2.new(0, 8, 0.5, -15)
+HookToggle.BackgroundColor3 = Color3.fromRGB(30, 160, 60)
+HookToggle.BorderSizePixel = 0
+HookToggle.Text = "▶  Start Hook"
+HookToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+HookToggle.Font = Enum.Font.GothamBold
+HookToggle.TextSize = 11
+HookToggle.Parent = LogsToolbar
+Instance.new("UICorner", HookToggle).CornerRadius = UDim.new(0, 6)
+
 local ClearLogsBtn = Instance.new("TextButton")
-ClearLogsBtn.Size = UDim2.new(0, 80, 0, 25)
-ClearLogsBtn.Position = UDim2.new(1, -85, 0, 5)
-ClearLogsBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+ClearLogsBtn.Size = UDim2.new(0, 75, 0, 30)
+ClearLogsBtn.Position = UDim2.new(0, 135, 0.5, -15)
+ClearLogsBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
 ClearLogsBtn.BorderSizePixel = 0
-ClearLogsBtn.Text = "Очистить"
-ClearLogsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClearLogsBtn.Text = "Clear"
+ClearLogsBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
 ClearLogsBtn.Font = Enum.Font.Gotham
 ClearLogsBtn.TextSize = 12
-ClearLogsBtn.Parent = LogsPage
-ClearLogsBtn.MouseButton1Click:Connect(function()
-    for _, child in ipairs(LogsPage:GetChildren()) do
-        if child:IsA("Frame") and child ~= LogTemplate then child:Destroy() end
-    end
-    Logs = {}
-end)
+ClearLogsBtn.Parent = LogsToolbar
+Instance.new("UICorner", ClearLogsBtn).CornerRadius = UDim.new(0, 6)
 
--- Функции
-function addLog(message)
-    local newLog = LogTemplate:Clone()
-    newLog.Visible = true
-    newLog.Parent = LogsPage
-    newLog.LayoutOrder = #LogsPage:GetChildren()
+-- Счётчик логов
+local LogCounter = Instance.new("TextLabel")
+LogCounter.Size = UDim2.new(0, 80, 0, 30)
+LogCounter.Position = UDim2.new(0, 218, 0.5, -15)
+LogCounter.BackgroundTransparency = 1
+LogCounter.Text = "0 logs"
+LogCounter.TextColor3 = Color3.fromRGB(100, 100, 130)
+LogCounter.Font = Enum.Font.Code
+LogCounter.TextSize = 11
+LogCounter.TextXAlignment = Enum.TextXAlignment.Left
+LogCounter.Parent = LogsToolbar
+
+-- FIX: FilterBox с правильным позиционированием
+local FilterBox = Instance.new("TextBox")
+FilterBox.Size = UDim2.new(0, 170, 0, 30)
+FilterBox.Position = UDim2.new(1, -178, 0.5, -15)
+FilterBox.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+FilterBox.BorderSizePixel = 0
+FilterBox.PlaceholderText = "🔍 Filter..."
+FilterBox.PlaceholderColor3 = Color3.fromRGB(100, 100, 130)
+FilterBox.Text = ""
+FilterBox.TextColor3 = Color3.fromRGB(220, 220, 240)
+FilterBox.Font = Enum.Font.Code
+FilterBox.TextSize = 12
+FilterBox.ClearTextOnFocus = false
+FilterBox.Parent = LogsToolbar
+Instance.new("UICorner", FilterBox).CornerRadius = UDim.new(0, 6)
+local _fbp = Instance.new("UIPadding", FilterBox)
+_fbp.PaddingLeft = UDim.new(0, 8)
+
+local LogsList = Instance.new("ScrollingFrame")
+LogsList.Size = UDim2.new(1, 0, 1, -44)
+LogsList.Position = UDim2.new(0, 0, 0, 44)
+LogsList.BackgroundTransparency = 1
+LogsList.BorderSizePixel = 0
+LogsList.CanvasSize = UDim2.new(0, 0, 0, 0)
+LogsList.ScrollBarThickness = 4
+LogsList.ScrollBarImageColor3 = Color3.fromRGB(80, 100, 180)
+LogsList.Parent = LogsPage
+
+local LogsLayout = Instance.new("UIListLayout")
+LogsLayout.Parent = LogsList
+LogsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+LogsLayout.Padding = UDim.new(0, 1)
+
+local LogsPadding = Instance.new("UIPadding")
+LogsPadding.PaddingLeft = UDim.new(0, 5)
+LogsPadding.PaddingRight = UDim.new(0, 5)
+LogsPadding.PaddingTop = UDim.new(0, 4)
+LogsPadding.Parent = LogsList
+
+-- ==================== CONSOLE PAGE ====================
+local ConsoleOutput = Instance.new("ScrollingFrame")
+ConsoleOutput.Size = UDim2.new(1, -10, 1, -90)
+ConsoleOutput.Position = UDim2.new(0, 5, 0, 5)
+ConsoleOutput.BackgroundColor3 = Color3.fromRGB(10, 12, 16)
+ConsoleOutput.BorderSizePixel = 0
+ConsoleOutput.CanvasSize = UDim2.new(0, 0, 0, 0)
+ConsoleOutput.ScrollBarThickness = 4
+ConsoleOutput.ScrollBarImageColor3 = Color3.fromRGB(80, 100, 180)
+ConsoleOutput.Parent = ConsolePage
+Instance.new("UICorner", ConsoleOutput).CornerRadius = UDim.new(0, 6)
+
+local ConsoleOutputLayout = Instance.new("UIListLayout")
+ConsoleOutputLayout.Parent = ConsoleOutput
+ConsoleOutputLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ConsoleOutputLayout.Padding = UDim.new(0, 2)
+
+local ConsoleOutputPad = Instance.new("UIPadding")
+ConsoleOutputPad.PaddingAll = UDim.new(0, 6)
+ConsoleOutputPad.Parent = ConsoleOutput
+
+local function addConsoleText(text, color)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 0)
+    label.AutomaticSize = Enum.AutomaticSize.Y
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = color or Color3.fromRGB(200, 230, 200)
+    label.Font = Enum.Font.Code
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextWrapped = true
+    label.RichText = false
+    label.Parent = ConsoleOutput
+    ConsoleOutput.CanvasSize = UDim2.new(0, 0, 0, ConsoleOutputLayout.AbsoluteContentSize.Y + 12)
+    ConsoleOutput.CanvasPosition = Vector2.new(0, math.huge)
+end
+
+addConsoleText("-- RemoteSpy Ultimate Console --", Color3.fromRGB(80, 140, 255))
+addConsoleText("-- Click a log to copy args | Use tab Remotes to inspect", Color3.fromRGB(100, 100, 130))
+
+local ConsoleInputContainer = Instance.new("Frame")
+ConsoleInputContainer.Size = UDim2.new(1, -10, 0, 40)
+ConsoleInputContainer.Position = UDim2.new(0, 5, 1, -45)
+ConsoleInputContainer.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
+ConsoleInputContainer.BorderSizePixel = 0
+ConsoleInputContainer.Parent = ConsolePage
+Instance.new("UICorner", ConsoleInputContainer).CornerRadius = UDim.new(0, 6)
+
+local ConsolePrompt = Instance.new("TextLabel")
+ConsolePrompt.Size = UDim2.new(0, 20, 1, 0)
+ConsolePrompt.Position = UDim2.new(0, 8, 0, 0)
+ConsolePrompt.BackgroundTransparency = 1
+ConsolePrompt.Text = ">"
+ConsolePrompt.TextColor3 = Color3.fromRGB(80, 140, 255)
+ConsolePrompt.Font = Enum.Font.Code
+ConsolePrompt.TextSize = 14
+ConsolePrompt.Parent = ConsoleInputContainer
+
+local ConsoleInput = Instance.new("TextBox")
+ConsoleInput.Size = UDim2.new(1, -120, 1, 0)
+ConsoleInput.Position = UDim2.new(0, 28, 0, 0)
+ConsoleInput.BackgroundTransparency = 1
+ConsoleInput.PlaceholderText = "Enter Lua code..."
+ConsoleInput.PlaceholderColor3 = Color3.fromRGB(80, 80, 110)
+ConsoleInput.Text = ""
+ConsoleInput.TextColor3 = Color3.fromRGB(230, 230, 255)
+ConsoleInput.Font = Enum.Font.Code
+ConsoleInput.TextSize = 12
+ConsoleInput.ClearTextOnFocus = false
+ConsoleInput.Parent = ConsoleInputContainer
+
+local ConsoleExecuteBtn = Instance.new("TextButton")
+ConsoleExecuteBtn.Size = UDim2.new(0, 85, 0, 28)
+ConsoleExecuteBtn.Position = UDim2.new(1, -90, 0.5, -14)
+ConsoleExecuteBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 230)
+ConsoleExecuteBtn.BorderSizePixel = 0
+ConsoleExecuteBtn.Text = "Execute"
+ConsoleExecuteBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ConsoleExecuteBtn.Font = Enum.Font.GothamBold
+ConsoleExecuteBtn.TextSize = 11
+ConsoleExecuteBtn.Parent = ConsoleInputContainer
+Instance.new("UICorner", ConsoleExecuteBtn).CornerRadius = UDim.new(0, 5)
+
+local ConsoleClearBtn = Instance.new("TextButton")
+ConsoleClearBtn.Size = UDim2.new(0, 90, 0, 28)
+ConsoleClearBtn.Position = UDim2.new(1, -10, 0, -32)
+ConsoleClearBtn.AnchorPoint = Vector2.new(1, 0)
+ConsoleClearBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+ConsoleClearBtn.BorderSizePixel = 0
+ConsoleClearBtn.Text = "Clear Output"
+ConsoleClearBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
+ConsoleClearBtn.Font = Enum.Font.Gotham
+ConsoleClearBtn.TextSize = 11
+ConsoleClearBtn.Parent = ConsolePage
+Instance.new("UICorner", ConsoleClearBtn).CornerRadius = UDim.new(0, 5)
+
+-- ==================== REMOTES PAGE ====================
+local RemotesToolbar = Instance.new("Frame")
+RemotesToolbar.Size = UDim2.new(1, 0, 0, 40)
+RemotesToolbar.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+RemotesToolbar.BorderSizePixel = 0
+RemotesToolbar.Parent = RemotesPage
+
+local RefreshBtn = Instance.new("TextButton")
+RefreshBtn.Size = UDim2.new(0, 100, 0, 28)
+RefreshBtn.Position = UDim2.new(0, 8, 0.5, -14)
+RefreshBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 230)
+RefreshBtn.BorderSizePixel = 0
+RefreshBtn.Text = "⟳  Refresh"
+RefreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+RefreshBtn.Font = Enum.Font.GothamBold
+RefreshBtn.TextSize = 12
+RefreshBtn.Parent = RemotesToolbar
+Instance.new("UICorner", RefreshBtn).CornerRadius = UDim.new(0, 6)
+
+local RemoteCount = Instance.new("TextLabel")
+RemoteCount.Size = UDim2.new(0, 150, 1, 0)
+RemoteCount.Position = UDim2.new(0, 120, 0, 0)
+RemoteCount.BackgroundTransparency = 1
+RemoteCount.Text = "No remotes scanned"
+RemoteCount.TextColor3 = Color3.fromRGB(100, 100, 130)
+RemoteCount.Font = Enum.Font.Code
+RemoteCount.TextSize = 11
+RemoteCount.TextXAlignment = Enum.TextXAlignment.Left
+RemoteCount.Parent = RemotesToolbar
+
+local RemotesList = Instance.new("ScrollingFrame")
+RemotesList.Size = UDim2.new(1, 0, 1, -40)
+RemotesList.Position = UDim2.new(0, 0, 0, 40)
+RemotesList.BackgroundTransparency = 1
+RemotesList.BorderSizePixel = 0
+RemotesList.CanvasSize = UDim2.new(0, 0, 0, 0)
+RemotesList.ScrollBarThickness = 4
+RemotesList.ScrollBarImageColor3 = Color3.fromRGB(80, 100, 180)
+RemotesList.Parent = RemotesPage
+
+local RemotesLayout = Instance.new("UIListLayout")
+RemotesLayout.Parent = RemotesList
+RemotesLayout.SortOrder = Enum.SortOrder.LayoutOrder
+RemotesLayout.Padding = UDim.new(0, 2)
+
+local RemotesPadding = Instance.new("UIPadding")
+RemotesPadding.PaddingLeft = UDim.new(0, 5)
+RemotesPadding.PaddingRight = UDim.new(0, 5)
+RemotesPadding.PaddingTop = UDim.new(0, 4)
+RemotesPadding.Parent = RemotesList
+
+-- ==================== ФУНКЦИИ ====================
+
+local function updateCanvasSize()
+    -- FIX: используем RunService.Heartbeat чтобы дать время Layout посчитать
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        conn:Disconnect()
+        LogsList.CanvasSize = UDim2.new(0, 0, 0, LogsLayout.AbsoluteContentSize.Y + 8)
+        if not LogsPage.Visible then return end
+        -- Автоскролл вниз
+        LogsList.CanvasPosition = Vector2.new(0, math.huge)
+    end)
+end
+
+-- FIX: addLog объявлена ПОСЛЕ serializeArgs
+local filterText = ""
+
+local function addLog(remoteType, remotePath, argsStr, result)
+    LogCount = LogCount + 1
+    LogCounter.Text = LogCount .. " logs"
+    
+    local timestamp = os.date("%H:%M:%S")
+    local color = remoteType == "FireServer" and Color3.fromRGB(255, 200, 80)
+               or remoteType == "InvokeServer" and Color3.fromRGB(80, 200, 255)
+               or Color3.fromRGB(180, 180, 200)
+    
+    local displayText = string.format("[%s] [%s] %s(%s)", timestamp, remoteType, remotePath, argsStr)
+    if result then displayText = displayText .. "  →  " .. tostring(result) end
+    
+    -- FIX: удаляем старые логи ПЕРЕД добавлением нового (избегаем GetChildren() лишний раз)
+    local children = LogsList:GetChildren()
+    local frameCount = 0
+    for _, c in ipairs(children) do
+        if c:IsA("Frame") then frameCount = frameCount + 1 end
+    end
+    if frameCount >= Settings.MaxLogs then
+        for _, c in ipairs(children) do
+            if c:IsA("Frame") then c:Destroy(); break end
+        end
+    end
+    
+    local entry = Instance.new("Frame")
+    entry.Size = UDim2.new(1, 0, 0, 28)
+    entry.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    entry.BorderSizePixel = 0
+    entry.LayoutOrder = LogCount
+    
+    -- Полоска типа
+    local typeBar = Instance.new("Frame")
+    typeBar.Size = UDim2.new(0, 3, 1, 0)
+    typeBar.BackgroundColor3 = color
+    typeBar.BorderSizePixel = 0
+    typeBar.Parent = entry
     
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(1, -10, 1, 0)
-    label.Position = UDim2.new(0, 5, 0, 0)
+    label.Position = UDim2.new(0, 8, 0, 0)
     label.BackgroundTransparency = 1
-    label.Text = message
-    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.Text = displayText
+    label.TextColor3 = color
     label.Font = Enum.Font.Code
     label.TextSize = 11
     label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = newLog
+    label.TextTruncate = Enum.TextTruncate.AtEnd
+    label.Parent = entry
     
-    LogsPage.CanvasSize = UDim2.new(0, 0, 0, LogsList.AbsoluteContentSize.Y + 5)
+    -- FIX: hover эффект
+    entry.MouseEnter:Connect(function()
+        entry.BackgroundColor3 = Color3.fromRGB(30, 32, 45)
+    end)
+    entry.MouseLeave:Connect(function()
+        entry.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    end)
+    
+    -- FIX: клик копирует в буфер и показывает в консоли
+    entry.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            pcall(function() setclipboard(argsStr) end)
+            setTab(2) -- переключаем на консоль
+            addConsoleText(string.format("-- Copied: %s(%s)", remotePath, argsStr), Color3.fromRGB(255, 220, 80))
+        end
+    end)
+    
+    -- FIX: видимость при фильтре
+    if filterText ~= "" then
+        entry.Visible = displayText:lower():find(filterText:lower(), 1, true) ~= nil
+    end
+    
+    entry.Parent = LogsList
+    
+    -- Сохранение в файл
+    if Settings.SaveLogs then
+        pcall(function()
+            local fileName = string.format("%s/PlaceId_%s_%s.txt", Settings.LogFolder, tostring(game.PlaceId), os.date("%Y%m%d"))
+            appendfile(fileName, displayText .. "\n")
+        end)
+    end
+    
+    updateCanvasSize()
 end
 
-function scanRemotes()
-    RemoteList = {}
-    local services = {game.ReplicatedStorage, game.Players, workspace, game.Lighting}
-    for _, service in ipairs(services) do
+-- ==================== SCAN REMOTES ====================
+
+local function scanRemotes()
+    local list = {}
+    local seen = {}
+    local servicesToCheck = {}
+    
+    pcall(function() servicesToCheck[#servicesToCheck+1] = game:GetService("ReplicatedStorage") end)
+    pcall(function() servicesToCheck[#servicesToCheck+1] = game:GetService("ReplicatedFirst") end)
+    pcall(function() servicesToCheck[#servicesToCheck+1] = Players end)
+    pcall(function() servicesToCheck[#servicesToCheck+1] = workspace end)
+    
+    for _, service in ipairs(servicesToCheck) do
         pcall(function()
             for _, obj in ipairs(service:GetDescendants()) do
-                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                    table.insert(RemoteList, obj)
+                if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) and not seen[obj] then
+                    seen[obj] = true
+                    table.insert(list, obj)
                 end
             end
         end)
     end
-    return RemoteList
+    return list
 end
 
-function refreshRemotesList()
-    for _, child in ipairs(RemotesPage:GetChildren()) do
+local function refreshRemotesList()
+    for _, child in ipairs(RemotesList:GetChildren()) do
         if child:IsA("Frame") then child:Destroy() end
     end
+    
     local remotes = scanRemotes()
-    for i, remote in ipairs(remotes) do
+    RemoteCount.Text = #remotes .. " remotes found"
+    
+    for _, remote in ipairs(remotes) do
+        local isEvent = remote:IsA("RemoteEvent")
+        local color = isEvent and Color3.fromRGB(255, 190, 60) or Color3.fromRGB(60, 180, 255)
+        local typeTag = isEvent and "RE" or "RF"
+        
         local frame = Instance.new("Frame")
-        frame.Size = UDim2.new(1, -10, 0, 25)
-        frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        frame.Size = UDim2.new(1, 0, 0, 34)
+        frame.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
         frame.BorderSizePixel = 0
-        frame.Parent = RemotesPage
+        
+        local bar = Instance.new("Frame")
+        bar.Size = UDim2.new(0, 3, 1, 0)
+        bar.BackgroundColor3 = color
+        bar.BorderSizePixel = 0
+        bar.Parent = frame
+        
+        local tag = Instance.new("TextLabel")
+        tag.Size = UDim2.new(0, 28, 0, 18)
+        tag.Position = UDim2.new(0, 8, 0.5, -9)
+        tag.BackgroundColor3 = color
+        tag.BorderSizePixel = 0
+        tag.Text = typeTag
+        tag.TextColor3 = Color3.fromRGB(15, 15, 20)
+        tag.Font = Enum.Font.GothamBold
+        tag.TextSize = 9
+        tag.Parent = frame
+        Instance.new("UICorner", tag).CornerRadius = UDim.new(0, 3)
         
         local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(1, -60, 1, 0)
-        label.Position = UDim2.new(0, 5, 0, 0)
+        label.Size = UDim2.new(1, -130, 1, 0)
+        label.Position = UDim2.new(0, 42, 0, 0)
         label.BackgroundTransparency = 1
         label.Text = remote:GetFullName()
-        label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        label.TextColor3 = Color3.fromRGB(200, 200, 220)
         label.Font = Enum.Font.Code
         label.TextSize = 11
         label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextTruncate = Enum.TextTruncate.AtEnd
         label.Parent = frame
         
-        local execBtn = Instance.new("TextButton")
-        execBtn.Size = UDim2.new(0, 50, 1, 0)
-        execBtn.Position = UDim2.new(1, -55, 0, 0)
-        execBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-        execBtn.BorderSizePixel = 0
-        execBtn.Text = "Exec"
-        execBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        execBtn.Font = Enum.Font.Gotham
-        execBtn.TextSize = 11
-        execBtn.Parent = frame
-        execBtn.MouseButton1Click:Connect(function()
-            -- Выполнение с запросом аргументов через консоль
-            ConsolePage.Visible = true
-            LogsPage.Visible = false
-            RemotesPage.Visible = false
-            ConsoleInput.Text = 'local remote = game:GetService("' .. remote:GetFullName() .. '")\n-- remote:FireServer(...) или remote:InvokeServer(...)'
+        local useBtn = Instance.new("TextButton")
+        useBtn.Size = UDim2.new(0, 55, 0, 24)
+        useBtn.Position = UDim2.new(1, -120, 0.5, -12)
+        useBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 230)
+        useBtn.BorderSizePixel = 0
+        useBtn.Text = "Use"
+        useBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        useBtn.Font = Enum.Font.GothamBold
+        useBtn.TextSize = 11
+        useBtn.Parent = frame
+        Instance.new("UICorner", useBtn).CornerRadius = UDim.new(0, 5)
+        
+        local copyBtn = Instance.new("TextButton")
+        copyBtn.Size = UDim2.new(0, 55, 0, 24)
+        copyBtn.Position = UDim2.new(1, -60, 0.5, -12)
+        copyBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+        copyBtn.BorderSizePixel = 0
+        copyBtn.Text = "Copy"
+        copyBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+        copyBtn.Font = Enum.Font.Gotham
+        copyBtn.TextSize = 11
+        copyBtn.Parent = frame
+        Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 5)
+        
+        frame.MouseEnter:Connect(function() frame.BackgroundColor3 = Color3.fromRGB(28, 30, 42) end)
+        frame.MouseLeave:Connect(function() frame.BackgroundColor3 = Color3.fromRGB(22, 22, 30) end)
+        
+        local remotePath = remote:GetFullName()
+        useBtn.MouseButton1Click:Connect(function()
+            SelectedRemote = remote
+            setTab(2)
+            local snippet
+            if isEvent then
+                snippet = string.format('game:GetService("ReplicatedStorage"):WaitForChild("%s"):FireServer()', remote.Name)
+            else
+                snippet = string.format('local result = game:GetService("ReplicatedStorage"):WaitForChild("%s"):InvokeServer()\nprint(result)', remote.Name)
+            end
+            ConsoleInput.Text = snippet
+            addConsoleText("-- Selected: " .. remotePath, Color3.fromRGB(255, 220, 80))
         end)
+        
+        copyBtn.MouseButton1Click:Connect(function()
+            pcall(function() setclipboard(remotePath) end)
+            copyBtn.Text = "✓"
+            task.delay(1, function() copyBtn.Text = "Copy" end)
+        end)
+        
+        frame.Parent = RemotesList
     end
-    RemotesPage.CanvasSize = UDim2.new(0, 0, 0, RemotesList.AbsoluteContentSize.Y + 5)
+    
+    RunService.Heartbeat:Wait()
+    RemotesList.CanvasSize = UDim2.new(0, 0, 0, RemotesLayout.AbsoluteContentSize.Y + 8)
 end
 
--- Перехват
-local oldFireServer = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
-    if Settings.HookEnabled and not HookedRemotes[self] then
-        HookedRemotes[self] = true
-        addLog(string.format("[FireServer] %s (%s)", self:GetFullName(), serializeArgs({...})))
-    end
-    return oldFireServer(self, ...)
-end)
+-- Подключаем refresh к кнопке вкладки Remotes
+TabButtons[3].MouseButton1Click:Connect(refreshRemotesList)
+RefreshBtn.MouseButton1Click:Connect(refreshRemotesList)
 
-local oldInvokeServer = hookfunction(Instance.new("RemoteFunction").InvokeServer, function(self, ...)
-    local result = oldInvokeServer(self, ...)
-    if Settings.HookEnabled and not HookedRemotes[self] then
-        HookedRemotes[self] = true
-        addLog(string.format("[InvokeServer] %s (%s) -> %s", self:GetFullName(), serializeArgs({...}), tostring(result)))
-    end
-    return result
-end)
+-- ==================== ХУКИ ====================
+-- FIX: правильный способ — hookmetamethod или hooking через __namecall/upvalue
+-- hookfunction на new Instance не работает корректно во всех executor'ах
+-- Используем hookmetamethod (работает в Delta и большинстве exploit executor'ов)
 
--- Функция сериализации
-function serializeArgs(args)
-    local parts = {}
-    for i, v in ipairs(args) do
-        local t = type(v)
-        if t == "string" then parts[i] = string.format("%q", v)
-        elseif t == "number" or t == "boolean" then parts[i] = tostring(v)
-        elseif t == "nil" then parts[i] = "nil"
-        elseif t == "userdata" then
-            if typeof(v) == "Vector3" then parts[i] = string.format("Vector3.new(%s,%s,%s)", v.X, v.Y, v.Z)
-            else parts[i] = tostring(v) end
-        else parts[i] = tostring(v) end
+local oldNamecall
+oldNamecall = hookmetamethod and hookmetamethod(game, "__namecall", function(self, ...)
+    if not Settings.HookEnabled then return oldNamecall(self, ...) end
+    
+    local method = getnamecallmethod()
+    
+    if (method == "FireServer") and self:IsA("RemoteEvent") then
+        local args = {...}
+        local remotePath = self:GetFullName()
+        local argsStr = serializeArgs(args)
+        -- FIX: pcall чтобы ошибки в addLog не ломали игру
+        pcall(addLog, "FireServer", remotePath, argsStr, nil)
+        return oldNamecall(self, ...)
+        
+    elseif (method == "InvokeServer") and self:IsA("RemoteFunction") then
+        local args = {...}
+        local remotePath = self:GetFullName()
+        local argsStr = serializeArgs(args)
+        local result = oldNamecall(self, ...)
+        pcall(addLog, "InvokeServer", remotePath, argsStr, result)
+        return result
+        
+    elseif (method == "FireAllClients" or method == "FireClient") and self:IsA("RemoteEvent") then
+        local args = {...}
+        local remotePath = self:GetFullName()
+        local argsStr = serializeArgs(args)
+        pcall(addLog, method, remotePath, argsStr, nil)
+        return oldNamecall(self, ...)
     end
-    return table.concat(parts, ", ")
+    
+    return oldNamecall(self, ...)
+end) or nil
+
+-- Fallback если hookmetamethod недоступен
+if not oldNamecall then
+    local function tryHookFallback()
+        -- hookfunction на прототипе RemoteEvent
+        local testRE = Instance.new("RemoteEvent")
+        local testRF = Instance.new("RemoteFunction")
+        
+        local oldFS
+        pcall(function()
+            oldFS = hookfunction(testRE.FireServer, function(self, ...)
+                if Settings.HookEnabled and self:IsA("RemoteEvent") then
+                    pcall(addLog, "FireServer", self:GetFullName(), serializeArgs({...}), nil)
+                end
+                return oldFS(self, ...)
+            end)
+        end)
+        
+        local oldIS
+        pcall(function()
+            oldIS = hookfunction(testRF.InvokeServer, function(self, ...)
+                if Settings.HookEnabled and self:IsA("RemoteFunction") then
+                    local result = oldIS(self, ...)
+                    pcall(addLog, "InvokeServer", self:GetFullName(), serializeArgs({...}), result)
+                    return result
+                end
+                return oldIS(self, ...)
+            end)
+        end)
+        
+        testRE:Destroy()
+        testRF:Destroy()
+    end
+    pcall(tryHookFallback)
 end
 
--- Кнопка включения перехвата
-local ToggleHookBtn = Instance.new("TextButton")
-ToggleHookBtn.Size = UDim2.new(0, 100, 0, 25)
-ToggleHookBtn.Position = UDim2.new(0, 5, 0, 5)
-ToggleHookBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-ToggleHookBtn.BorderSizePixel = 0
-ToggleHookBtn.Text = "Start Hook"
-ToggleHookBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleHookBtn.Font = Enum.Font.GothamBold
-ToggleHookBtn.TextSize = 12
-ToggleHookBtn.Parent = LogsPage
-ToggleHookBtn.MouseButton1Click:Connect(function()
+-- ==================== ОБРАБОТЧИКИ ====================
+
+HookToggle.MouseButton1Click:Connect(function()
     Settings.HookEnabled = not Settings.HookEnabled
-    ToggleHookBtn.Text = Settings.HookEnabled and "Stop Hook" or "Start Hook"
-    ToggleHookBtn.BackgroundColor3 = Settings.HookEnabled and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(0, 100, 200)
-    HookedRemotes = {}
-    addLog(Settings.HookEnabled and "=== Hook Enabled ===" or "=== Hook Disabled ===")
+    if Settings.HookEnabled then
+        HookToggle.Text = "⏸  Stop Hook"
+        HookToggle.BackgroundColor3 = Color3.fromRGB(200, 50, 60)
+        HookStatus.Text = "● ACTIVE"
+        HookStatus.TextColor3 = Color3.fromRGB(60, 220, 100)
+    else
+        HookToggle.Text = "▶  Start Hook"
+        HookToggle.BackgroundColor3 = Color3.fromRGB(30, 160, 60)
+        HookStatus.Text = "● IDLE"
+        HookStatus.TextColor3 = Color3.fromRGB(160, 160, 180)
+    end
 end)
 
--- Инициализация
-addLog("RemoteSpy Custom loaded. Use Start Hook to begin.")
+ClearLogsBtn.MouseButton1Click:Connect(function()
+    for _, child in ipairs(LogsList:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    LogCount = 0
+    LogCounter.Text = "0 logs"
+    LogsList.CanvasSize = UDim2.new(0, 0, 0, 0)
+end)
+
+-- FIX: фильтр корректно учитывает все Frame
+FilterBox:GetPropertyChangedSignal("Text"):Connect(function()
+    filterText = FilterBox.Text:lower()
+    for _, entry in ipairs(LogsList:GetChildren()) do
+        if entry:IsA("Frame") then
+            local label = entry:FindFirstChildOfClass("TextLabel")
+            if label then
+                if filterText == "" then
+                    entry.Visible = true
+                else
+                    entry.Visible = label.Text:lower():find(filterText, 1, true) ~= nil
+                end
+            end
+        end
+    end
+end)
+
+-- FIX: execute с полной поддержкой pcall и printout
+local function executeConsole()
+    local code = ConsoleInput.Text
+    if code == "" then return end
+    addConsoleText("> " .. code, Color3.fromRGB(160, 160, 200))
+    ConsoleInput.Text = ""
+    local fn, compileErr = loadstring(code)
+    if not fn then
+        addConsoleText("Compile error: " .. tostring(compileErr), Color3.fromRGB(255, 80, 80))
+        return
+    end
+    local success, result = pcall(fn)
+    if success then
+        addConsoleText(tostring(result ~= nil and result or "(nil)"), Color3.fromRGB(100, 230, 130))
+    else
+        addConsoleText("Runtime error: " .. tostring(result), Color3.fromRGB(255, 80, 80))
+    end
+end
+
+ConsoleExecuteBtn.MouseButton1Click:Connect(executeConsole)
+
+ConsoleInput.FocusLost:Connect(function(enterPressed)
+    if enterPressed then executeConsole() end
+end)
+
+ConsoleClearBtn.MouseButton1Click:Connect(function()
+    for _, child in ipairs(ConsoleOutput:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+    ConsoleOutput.CanvasSize = UDim2.new(0, 0, 0, 0)
+    addConsoleText("-- Console cleared --", Color3.fromRGB(80, 140, 255))
+end)
+
+-- Minimize / Close
+MinimizeBtn.MouseButton1Click:Connect(function()
+    Minimized = not Minimized
+    if Minimized then
+        MainFrame.Size = MinimizedSize
+        ContentFrame.Visible = false
+        TabContainer.Visible = false
+        MinimizeBtn.Text = "□"
+    else
+        MainFrame.Size = OriginalSize
+        ContentFrame.Visible = true
+        TabContainer.Visible = true
+        MinimizeBtn.Text = "─"
+    end
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    local confirmFrame = Instance.new("Frame")
+    confirmFrame.Size = UDim2.new(0, 260, 0, 110)
+    confirmFrame.Position = UDim2.new(0.5, -130, 0.5, -55)
+    confirmFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    confirmFrame.BorderSizePixel = 0
+    confirmFrame.ZIndex = 10
+    confirmFrame.Parent = MainFrame
+    Instance.new("UICorner", confirmFrame).CornerRadius = UDim.new(0, 8)
+    
+    local border = Instance.new("UIStroke")
+    border.Color = Color3.fromRGB(80, 140, 255)
+    border.Thickness = 1
+    border.Parent = confirmFrame
+    
+    local confirmText = Instance.new("TextLabel")
+    confirmText.Size = UDim2.new(1, 0, 0, 50)
+    confirmText.Position = UDim2.new(0, 0, 0, 10)
+    confirmText.BackgroundTransparency = 1
+    confirmText.Text = "Close RemoteSpy Ultimate?"
+    confirmText.TextColor3 = Color3.fromRGB(230, 230, 255)
+    confirmText.Font = Enum.Font.GothamBold
+    confirmText.TextSize = 13
+    confirmText.ZIndex = 11
+    confirmText.Parent = confirmFrame
+    
+    local yesBtn = Instance.new("TextButton")
+    yesBtn.Size = UDim2.new(0, 100, 0, 32)
+    yesBtn.Position = UDim2.new(0, 15, 1, -45)
+    yesBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 60)
+    yesBtn.BorderSizePixel = 0
+    yesBtn.Text = "Close"
+    yesBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    yesBtn.Font = Enum.Font.GothamBold
+    yesBtn.TextSize = 12
+    yesBtn.ZIndex = 11
+    yesBtn.Parent = confirmFrame
+    Instance.new("UICorner", yesBtn).CornerRadius = UDim.new(0, 6)
+    yesBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+    
+    local noBtn = Instance.new("TextButton")
+    noBtn.Size = UDim2.new(0, 100, 0, 32)
+    noBtn.Position = UDim2.new(1, -115, 1, -45)
+    noBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    noBtn.BorderSizePixel = 0
+    noBtn.Text = "Cancel"
+    noBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+    noBtn.Font = Enum.Font.Gotham
+    noBtn.TextSize = 12
+    noBtn.ZIndex = 11
+    noBtn.Parent = confirmFrame
+    Instance.new("UICorner", noBtn).CornerRadius = UDim.new(0, 6)
+    noBtn.MouseButton1Click:Connect(function() confirmFrame:Destroy() end)
+end)
+
+-- ==================== СТАРТ ====================
+addLog("System", "RemoteSpy.v2.0", "Loaded successfully", nil)
+print("[RemoteSpy Ultimate v2.0] Loaded. GUI parent:", ScreenGui.Parent)
