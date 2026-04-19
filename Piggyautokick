@@ -1,623 +1,690 @@
---[[
-    Flee The Facility - Orion UI Script
-    Based on analysis of game structure and Koala Hacks sources
-    Features:
-    - Accurate object detection (functional PCs, exit doors, beasts)
-    - ESP with role detection
-    - Auto Hack with anti-error
-    - Fly (PC + mobile support)
-    - Player mods (Speed, Jump, InfJump, NoClip)
-    - Beast tools (Anti-Freeze, Teleport to survivors)
-    - Teleports to PCs, exits, cryo chambers
-    - Full Bright
-]]
+-- RemoteSpy Pro: Расширенный инструмент для перехвата, логирования и эксплуатации RemoteEvent и RemoteFunction
+-- Автор: QANUI / Gemini
 
--- Load Orion UI Library
+-- Загрузка Orion UI
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 
--- Services
+-- Сервисы
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
 
--- Platform detection
-local isMobile = UserInputService.TouchEnabled
-
--- Welcome notification
-OrionLib:MakeNotification({
-    Name = "FTF Pro Script",
-    Content = isMobile and "Mobile version" or "PC version",
-    Time = 3
-})
-
--- Main Window
-local Window = OrionLib:MakeWindow({
-    Name = "Flee The Facility | Pro",
-    HidePremium = false,
-    SaveConfig = true,
-    ConfigFolder = "FTF_Pro",
-    IntroEnabled = true,
-    IntroText = "Loading FTF Pro..."
-})
-
--- Tabs
-local MainTab = Window:MakeTab({ Name = "Main", Icon = "rbxassetid://4483345998" })
-local ESPTab = Window:MakeTab({ Name = "ESP", Icon = "rbxassetid://4483345998" })
-local PlayerTab = Window:MakeTab({ Name = "Player", Icon = "rbxassetid://4483345998" })
-local BeastTab = Window:MakeTab({ Name = "Beast", Icon = "rbxassetid://4483345998" })
-local TeleportTab = Window:MakeTab({ Name = "Teleports", Icon = "rbxassetid://4483345998" })
-
--- Settings
+-- Настройки
 local Settings = {
-    AutoHack = false,
-    AutoHackRange = 30,
-    ESP = {
-        Enabled = false,
-        Computers = true,
-        Exits = true,
-        CryoChambers = true,
-        Beasts = true,
-        Survivors = true,
-        BeastPlayer = true
-    },
-    Speed = 16,
-    JumpPower = 50,
-    InfiniteJump = false,
-    NoClip = false,
-    AntiFreeze = false,
-    Fly = false,
-    FlySpeed = 50,
-    FullBright = false
+    HookEnabled = false,
+    MaxLogEntries = 100,
+    SaveLogsToFile = true,
+    DebugMode = true
 }
 
--- ==================== OBJECT SCANNER (ACCURATE) ====================
-local function scanGame()
-    local objects = {
-        computers = {},    -- functional PCs (with ProximityPrompt)
-        exitDoors = {},    -- escape exits
-        cryoChambers = {}, -- cryo chambers (if present)
-        beasts = {}        -- beast objects
+-- Таблицы для хранения данных
+local Logs = {}
+local HookConnections = {}
+local RemoteList = {}
+
+-- Путь для сохранения файлов
+local SaveFolder = "RemoteSpy_Logs"
+if not isfolder(SaveFolder) then
+    makefolder(SaveFolder)
+end
+
+-- Функция для сериализации аргументов (поддержка таблиц, Vector3, CFrame и т.д.)
+local function serializeArgs(args, depth)
+    depth = depth or 0
+    if depth > 5 then return "{...}" end -- Защита от рекурсии
+    
+    local serialized = {}
+    for i, v in ipairs(args) do
+        local t = type(v)
+        if t == "string" then
+            table.insert(serialized, string.format("%q", v))
+        elseif t == "number" or t == "boolean" then
+            table.insert(serialized, tostring(v))
+        elseif t == "nil" then
+            table.insert(serialized, "nil")
+        elseif t == "table" then
+            -- Обработка таблиц
+            local parts = {}
+            for k, val in pairs(v) do
+                local keyStr = type(k) == "string" and string.format("%q", k) or tostring(k)
+                local valStr = serializeArgs({val}, depth + 1)
+                table.insert(parts, string.format("[%s] = %s", keyStr, valStr))
+            end
+            table.insert(serialized, "{" .. table.concat(parts, ", ") .. "}")
+        elseif t == "userdata" then
+            -- Обработка специальных типов Roblox
+            if typeof(v) == "Vector3" then
+                table.insert(serialized, string.format("Vector3.new(%s, %s, %s)", v.X, v.Y, v.Z))
+            elseif typeof(v) == "CFrame" then
+                table.insert(serialized, string.format("CFrame.new(%s, %s, %s)", v.X, v.Y, v.Z))
+            elseif typeof(v) == "Color3" then
+                table.insert(serialized, string.format("Color3.fromRGB(%s, %s, %s)", math.floor(v.R*255), math.floor(v.G*255), math.floor(v.B*255)))
+            else
+                table.insert(serialized, tostring(v))
+            end
+        elseif t == "function" then
+            table.insert(serialized, "function(...)")
+        else
+            table.insert(serialized, tostring(v))
+        end
+    end
+    return table.concat(serialized, ", ")
+end
+
+-- Функция для парсинга аргументов из строки (поддержка таблиц, Vector3 и т.д.)
+local function parseArgs(str)
+    if not str or str == "" then return {} end
+    
+    local success, result = pcall(function()
+        -- Создаем безопасное окружение для парсинга
+        local env = {
+            Vector3 = Vector3,
+            CFrame = CFrame,
+            Color3 = Color3,
+            BrickColor = BrickColor,
+            UDim2 = UDim2,
+            UDim = UDim,
+            Ray = Ray,
+            TweenInfo = TweenInfo,
+            NumberRange = NumberRange,
+            NumberSequence = NumberSequence,
+            ColorSequence = ColorSequence,
+        }
+        
+        local func, err = loadstring("return " .. str)
+        if not func then
+            func, err = loadstring("return {" .. str .. "}")
+        end
+        
+        if func then
+            setfenv(func, env)
+            local res = func()
+            if type(res) == "table" then
+                return res
+            else
+                return {res}
+            end
+        else
+            return {}
+        end
+    end)
+    
+    if success then
+        return result
+    else
+        return {}
+    end
+end
+
+-- Функция для добавления записи в лог
+local function addLog(logType, remoteType, remote, args, result, stackTrace)
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local remotePath = tostring(remote)
+    local remoteName = remote.Name or "Unknown"
+    local remoteParent = remote.Parent and remote.Parent:GetFullName() or "Unknown"
+    
+    local logEntry = {
+        Timestamp = timestamp,
+        Type = remoteType,
+        Name = remoteName,
+        Path = remoteParent .. "." .. remoteName,
+        FullPath = remotePath,
+        Args = args,
+        Result = result,
+        StackTrace = stackTrace,
+        LogType = logType
     }
     
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") then
-            local name = obj.Name:lower()
-            
-            -- Functional computers: must have an enabled ProximityPrompt
-            if name:find("computer") or name:find("pc") or name:find("laptop") then
-                for _, child in pairs(obj:GetDescendants()) do
-                    if child:IsA("ProximityPrompt") and child.Enabled then
-                        table.insert(objects.computers, obj)
-                        break
-                    end
-                end
-            end
-            
-            -- Exit doors
-            if name:find("exit") or name:find("escape") then
-                table.insert(objects.exitDoors, obj)
-            end
-            
-            -- Cryo chambers
-            if name:find("cryo") or name:find("chamber") then
-                table.insert(objects.cryoChambers, obj)
-            end
-            
-            -- Beast objects
-            if name:find("beast") or name:find("creature") then
-                table.insert(objects.beasts, obj)
-            end
-        end
+    table.insert(Logs, 1, logEntry)
+    
+    -- Ограничение количества записей
+    while #Logs > Settings.MaxLogEntries do
+        table.remove(Logs)
     end
     
-    return objects
-end
-
--- ==================== ESP SYSTEM ====================
-local ESPConnections = {}
-local function toggleESP()
-    -- Cleanup old connections
-    for _, conn in pairs(ESPConnections) do
-        pcall(function() conn:Disconnect() end)
-    end
-    ESPConnections = {}
-    
-    -- Remove existing highlights
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:FindFirstChild("FTF_ESP") then
-            obj.FTF_ESP:Destroy()
-        end
-    end
-    
-    if not Settings.ESP.Enabled then return end
-    
-    local function createHighlight(obj, color, text)
-        if obj:FindFirstChild("FTF_ESP") then return end
-        
-        local highlight = Instance.new("Highlight")
-        highlight.Name = "FTF_ESP"
-        highlight.FillColor = color
-        highlight.OutlineColor = Color3.new(1, 1, 1)
-        highlight.FillTransparency = 0.3
-        highlight.OutlineTransparency = 0.2
-        highlight.Parent = obj
-        
-        local billboard = Instance.new("BillboardGui")
-        billboard.Name = "FTF_ESP_Label"
-        billboard.Size = UDim2.new(0, 100, 0, 30)
-        billboard.StudsOffset = Vector3.new(0, 2, 0)
-        billboard.AlwaysOnTop = true
-        billboard.Parent = obj
-        
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(1, 0, 1, 0)
-        label.BackgroundTransparency = 0.7
-        label.BackgroundColor3 = color
-        label.TextColor3 = Color3.new(1, 1, 1)
-        label.Text = text
-        label.Font = Enum.Font.GothamBold
-        label.TextSize = 12
-        label.Parent = billboard
-    end
-    
-    local connection = RunService.RenderStepped:Connect(function()
-        local objects = scanGame()
-        
-        if Settings.ESP.Computers then
-            for _, pc in pairs(objects.computers) do
-                createHighlight(pc, Color3.new(0, 1, 0), "💻 PC")
+    -- Обновление UI
+    pcall(function()
+        if LogTable then
+            local rows = {}
+            for i, entry in ipairs(Logs) do
+                local shortArgs = serializeArgs(entry.Args):sub(1, 30) .. (#serializeArgs(entry.Args) > 30 and "..." or "")
+                table.insert(rows, {
+                    Time = entry.Timestamp,
+                    Type = entry.Type,
+                    Name = entry.Name,
+                    Args = shortArgs,
+                    Index = i
+                })
             end
-        end
-        
-        if Settings.ESP.Exits then
-            for _, exit in pairs(objects.exitDoors) do
-                createHighlight(exit, Color3.new(0, 1, 1), "🚪 EXIT")
-            end
-        end
-        
-        if Settings.ESP.CryoChambers then
-            for _, cryo in pairs(objects.cryoChambers) do
-                createHighlight(cryo, Color3.new(0, 0.5, 1), "❄️ CRYO")
-            end
-        end
-        
-        if Settings.ESP.Beasts then
-            for _, beast in pairs(objects.beasts) do
-                createHighlight(beast, Color3.new(1, 0, 0), "👹 BEAST")
-            end
-        end
-        
-        -- Players with role detection (BeastPowers or Role attribute)
-        for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character then
-                local isBeast = false
-                if player.Character:FindFirstChild("BeastPowers") then
-                    isBeast = true
-                elseif player:GetAttribute("Role") == "Beast" then
-                    isBeast = true
-                end
-                
-                if isBeast and Settings.ESP.BeastPlayer then
-                    createHighlight(player.Character, Color3.new(1, 0, 0), "👹 " .. player.Name)
-                elseif not isBeast and Settings.ESP.Survivors then
-                    createHighlight(player.Character, Color3.new(0, 1, 0), "👤 " .. player.Name)
-                end
-            end
+            LogTable:Refresh(rows, true)
         end
     end)
     
-    table.insert(ESPConnections, connection)
+    -- Сохранение в файл
+    if Settings.SaveLogsToFile then
+        local fileName = SaveFolder .. "/" .. game.PlaceId .. "_" .. os.date("%Y%m%d") .. ".txt"
+        local logString = string.format("[%s] [%s] %s.%s(%s)\n", 
+            timestamp, remoteType, remoteParent, remoteName, serializeArgs(args))
+        if result ~= nil then
+            logString = logString .. "    Result: " .. serializeArgs({result}) .. "\n"
+        end
+        if stackTrace then
+            logString = logString .. "    Stack: " .. stackTrace .. "\n"
+        end
+        appendfile(fileName, logString)
+    end
+    
+    return logEntry
 end
 
--- ==================== AUTO HACK ====================
-local function startAutoHack()
-    task.spawn(function()
-        while Settings.AutoHack do
-            pcall(function()
-                local character = LocalPlayer.Character
-                if not character then return end
-                
-                local hrp = character:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                
-                local objects = scanGame()
-                local nearest = nil
-                local nearestDist = Settings.AutoHackRange
-                
-                for _, pc in pairs(objects.computers) do
-                    local dist = (hrp.Position - pc:GetPivot().Position).Magnitude
-                    if dist < nearestDist then
-                        nearestDist = dist
-                        nearest = pc
-                    end
+-- Функция для перехвата RemoteEvent:FireServer
+local function hookFireServer(originalFunc, remote)
+    return function(...)
+        local args = {...}
+        local stackTrace = Settings.DebugMode and debug.traceback(nil, 2) or nil
+        
+        -- Логирование
+        if Settings.HookEnabled then
+            addLog("FireServer", "RemoteEvent", remote, args, nil, stackTrace)
+        end
+        
+        -- Передача оригинальному серверу
+        return originalFunc(remote, ...)
+    end
+end
+
+-- Функция для перехвата RemoteFunction:InvokeServer
+local function hookInvokeServer(originalFunc, remote)
+    return function(...)
+        local args = {...}
+        local stackTrace = Settings.DebugMode and debug.traceback(nil, 2) or nil
+        
+        -- Вызов оригинального метода
+        local results = {originalFunc(remote, ...)}
+        
+        -- Логирование
+        if Settings.HookEnabled then
+            local result = #results == 1 and results[1] or results
+            addLog("InvokeServer", "RemoteFunction", remote, args, result, stackTrace)
+        end
+        
+        return unpack(results)
+    end
+end
+
+-- Функция для сканирования всех RemoteEvent и RemoteFunction в игре
+local function scanRemotes()
+    RemoteList = {}
+    local services = {
+        game:GetService("ReplicatedStorage"),
+        game:GetService("Players"),
+        game:GetService("Workspace"),
+        game:GetService("Lighting"),
+        game:GetService("StarterGui"),
+        game:GetService("StarterPlayer"),
+        game:GetService("SoundService"),
+        game:GetService("Chat"),
+        game:GetService("ServerStorage"),
+        game:GetService("ServerScriptService")
+    }
+    
+    for _, service in ipairs(services) do
+        pcall(function()
+            for _, obj in ipairs(service:GetDescendants()) do
+                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                    table.insert(RemoteList, {
+                        Object = obj,
+                        Name = obj.Name,
+                        Path = obj:GetFullName(),
+                        Type = obj.ClassName
+                    })
                 end
-                
-                if nearest then
-                    hrp.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
-                    wait(0.2)
-                    
-                    for _, child in pairs(nearest:GetDescendants()) do
-                        if child:IsA("ProximityPrompt") and child.Enabled then
-                            fireproximityprompt(child)
-                            wait(child.HoldDuration + 0.2)
-                            
-                            -- Anti PC error (Koala method)
-                            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                            if remotes and remotes:FindFirstChild("ComputerError") then
-                                remotes.ComputerError:FireServer()
-                            end
-                            break
-                        end
-                    end
-                end
+            end
+        end)
+    end
+    
+    return RemoteList
+end
+
+-- Функция для включения хуков
+local function enableHooks()
+    if HookConnections and #HookConnections > 0 then return end
+    
+    Settings.HookEnabled = true
+    
+    -- Хукаем все существующие RemoteEvent и RemoteFunction
+    for _, remoteData in ipairs(RemoteList) do
+        local remote = remoteData.Object
+        if remote:IsA("RemoteEvent") then
+            local oldHook
+            oldHook = hookfunction(remote.FireServer, function(...)
+                return hookFireServer(oldHook or remote.FireServer, remote)(...)
             end)
-            wait(0.5)
+            HookConnections[remote] = oldHook
+        elseif remote:IsA("RemoteFunction") then
+            local oldHook
+            oldHook = hookfunction(remote.InvokeServer, function(...)
+                return hookInvokeServer(oldHook or remote.InvokeServer, remote)(...)
+            end)
+            HookConnections[remote] = oldHook
         end
-    end)
-end
-
--- ==================== ANTI-FREEZE ====================
-local function startAntiFreeze()
-    task.spawn(function()
-        while Settings.AntiFreeze do
-            local character = LocalPlayer.Character
-            if character then
-                local humanoid = character:FindFirstChild("Humanoid")
-                if humanoid then
-                    humanoid.PlatformStand = false
-                    humanoid.WalkSpeed = Settings.Speed
-                    humanoid.JumpPower = Settings.JumpPower
-                    
-                    for _, effect in pairs(character:GetDescendants()) do
-                        if effect:IsA("ParticleEmitter") and effect.Name:lower():find("freeze") then
-                            effect.Enabled = false
-                        end
-                    end
-                end
+    end
+    
+    -- Хукаем новые ремоуты при их создании
+    local function hookNewRemote(remote)
+        if remote:IsA("RemoteEvent") then
+            local oldHook
+            oldHook = hookfunction(remote.FireServer, function(...)
+                return hookFireServer(oldHook or remote.FireServer, remote)(...)
+            end)
+            HookConnections[remote] = oldHook
+        elseif remote:IsA("RemoteFunction") then
+            local oldHook
+            oldHook = hookfunction(remote.InvokeServer, function(...)
+                return hookInvokeServer(oldHook or remote.InvokeServer, remote)(...)
+            end)
+            HookConnections[remote] = oldHook
+        end
+    end
+    
+    -- Наблюдаем за новыми объектами
+    local services = {game:GetService("ReplicatedStorage"), game:GetService("Players"), game:GetService("Workspace")}
+    for _, service in ipairs(services) do
+        service.DescendantAdded:Connect(function(child)
+            if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+                hookNewRemote(child)
             end
-            wait(0.1)
-        end
-    end)
+        end)
+    end
+    
+    OrionLib:MakeNotification({
+        Name = "RemoteSpy",
+        Content = "Перехват ремоутов включен!",
+        Time = 3
+    })
 end
 
--- ==================== FLY (PC + MOBILE) ====================
-local function startFly()
-    local player = LocalPlayer
-    local character = player.Character or player.CharacterAdded:Wait()
-    local hrp = character:WaitForChild("HumanoidRootPart")
-    local humanoid = character:WaitForChild("Humanoid")
-    
-    local bodyGyro = Instance.new("BodyGyro")
-    bodyGyro.P = 9e4
-    bodyGyro.Parent = hrp
-    bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    
-    local bodyVelocity = Instance.new("BodyVelocity")
-    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
-    bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    bodyVelocity.Parent = hrp
-    
-    task.spawn(function()
-        while Settings.Fly and hrp and humanoid do
-            wait()
-            humanoid.PlatformStand = true
-            bodyGyro.CFrame = Camera.CFrame
-            
-            local moveDirection = Vector3.new(0, 0, 0)
-            
-            if isMobile then
-                local joystick = UserInputService:GetJoystickState()
-                if joystick.Position.Magnitude > 0.1 then
-                    moveDirection = Vector3.new(joystick.Position.X, 0, -joystick.Position.Y) * Settings.FlySpeed
-                end
+-- Функция для отключения хуков
+local function disableHooks()
+    Settings.HookEnabled = false
+    OrionLib:MakeNotification({
+        Name = "RemoteSpy",
+        Content = "Перехват ремоутов отключен!",
+        Time = 3
+    })
+end
+
+-- Создание главного окна
+local Window = OrionLib:MakeWindow({
+    Name = "RemoteSpy Pro | Advanced",
+    HidePremium = false,
+    SaveConfig = true,
+    ConfigFolder = "RemoteSpy_Config",
+    IntroEnabled = true,
+    IntroText = "RemoteSpy Pro"
+})
+
+-- Вкладки
+local LogsTab = Window:MakeTab({ Name = "Логи", Icon = "rbxassetid://4483345998" })
+local RemoteListTab = Window:MakeTab({ Name = "Обзор", Icon = "rbxassetid://4483345998" })
+local ConsoleTab = Window:MakeTab({ Name = "Консоль", Icon = "rbxassetid://4483345998" })
+local SettingsTab = Window:MakeTab({ Name = "Настройки", Icon = "rbxassetid://4483345998" })
+
+-- Переменные для UI
+local LogTable
+local ConsoleInput
+local ConsoleOutput
+local SelectedLog = nil
+local RemoteDropdown
+local RemoteExecuteArgs
+local RemoteListTable
+local ConsoleHistory = {}
+
+-- Вкладка "Логи"
+LogsTab:AddSection({ Name = "Перехваченные вызовы" })
+
+-- Кнопки управления
+LogsTab:AddToggle({
+    Name = "Включить перехват",
+    Default = false,
+    Callback = function(val)
+        if val then
+            enableHooks()
+        else
+            disableHooks()
+        end
+    end
+})
+
+LogsTab:AddButton({
+    Name = "Очистить логи",
+    Callback = function()
+        Logs = {}
+        if LogTable then
+            LogTable:Refresh({}, true)
+        end
+    end
+})
+
+LogsTab:AddButton({
+    Name = "Сканировать ремоуты",
+    Callback = function()
+        local count = #scanRemotes()
+        OrionLib:MakeNotification({
+            Name = "Сканирование",
+            Content = "Найдено ремоутов: " .. count,
+            Time = 3
+        })
+    end
+})
+
+-- Таблица логов
+LogTable = LogsTab:AddTable({
+    Name = "История вызовов",
+    Columns = {"Время", "Тип", "Название", "Аргументы"},
+    Callback = function(index)
+        if index and Logs[index] then
+            SelectedLog = Logs[index]
+        end
+    end
+})
+
+-- Детали выбранного лога
+LogsTab:AddSection({ Name = "Детали вызова" })
+
+local LogDetailsLabel = LogsTab:AddLabel("Выберите запись в таблице")
+
+LogsTab:AddButton({
+    Name = "Выполнить с оригинальными аргументами",
+    Callback = function()
+        if not SelectedLog then
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Сначала выберите запись в таблице!",
+                Time = 3
+            })
+            return
+        end
+        
+        local remote = nil
+        pcall(function()
+            remote = game:GetService(SelectedLog.FullPath)
+        end)
+        
+        if not remote then
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Ремоут не найден: " .. SelectedLog.FullPath,
+                Time = 3
+            })
+            return
+        end
+        
+        local success, result = pcall(function()
+            if SelectedLog.Type == "RemoteEvent" then
+                remote:FireServer(unpack(SelectedLog.Args))
+                return "Выполнено"
             else
-                if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-                    moveDirection += Camera.CFrame.LookVector * Settings.FlySpeed
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-                    moveDirection -= Camera.CFrame.LookVector * Settings.FlySpeed
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-                    moveDirection -= Camera.CFrame.RightVector * Settings.FlySpeed
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-                    moveDirection += Camera.CFrame.RightVector * Settings.FlySpeed
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-                    moveDirection += Vector3.new(0, Settings.FlySpeed, 0)
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-                    moveDirection -= Vector3.new(0, Settings.FlySpeed, 0)
-                end
+                return remote:InvokeServer(unpack(SelectedLog.Args))
             end
+        end)
+        
+        OrionLib:MakeNotification({
+            Name = "Результат",
+            Content = success and ("Успешно: " .. tostring(result)) or ("Ошибка: " .. tostring(result)),
+            Time = 5
+        })
+    end
+})
+
+-- Поле для модифицированных аргументов
+local ModifiedArgsBox = LogsTab:AddTextbox({
+    Name = "Модифицированные аргументы",
+    Default = "",
+    TextDisappear = false,
+    Callback = function(val) end
+})
+
+LogsTab:AddButton({
+    Name = "Выполнить с модифицированными аргументами",
+    Callback = function()
+        if not SelectedLog then
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Сначала выберите запись в таблице!",
+                Time = 3
+            })
+            return
+        end
+        
+        local remote = nil
+        pcall(function()
+            remote = game:GetService(SelectedLog.FullPath)
+        end)
+        
+        if not remote then
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Ремоут не найден: " .. SelectedLog.FullPath,
+                Time = 3
+            })
+            return
+        end
+        
+        local args = parseArgs(ModifiedArgsBox.Value)
+        local success, result = pcall(function()
+            if SelectedLog.Type == "RemoteEvent" then
+                remote:FireServer(unpack(args))
+                return "Выполнено"
+            else
+                return remote:InvokeServer(unpack(args))
+            end
+        end)
+        
+        OrionLib:MakeNotification({
+            Name = "Результат",
+            Content = success and ("Успешно: " .. tostring(result)) or ("Ошибка: " .. tostring(result)),
+            Time = 5
+        })
+    end
+})
+
+-- Вкладка "Обзор" (список всех ремоутов)
+RemoteListTab:AddSection({ Name = "Все RemoteEvent и RemoteFunction" })
+
+RemoteListTab:AddButton({
+    Name = "Обновить список",
+    Callback = function()
+        local remotes = scanRemotes()
+        local rows = {}
+        for _, remoteData in ipairs(remotes) do
+            table.insert(rows, {
+                Name = remoteData.Name,
+                Type = remoteData.Type,
+                Path = remoteData.Path
+            })
+        end
+        if RemoteListTable then
+            RemoteListTable:Refresh(rows, true)
+        end
+        OrionLib:MakeNotification({
+            Name = "Обновлено",
+            Content = "Найдено ремоутов: " .. #remotes,
+            Time = 3
+        })
+    end
+})
+
+RemoteListTable = RemoteListTab:AddTable({
+    Name = "Список ремоутов",
+    Columns = {"Название", "Тип", "Путь"},
+    Callback = function(index)
+        local remotes = RemoteList
+        if remotes and remotes[index] then
+            local remoteData = remotes[index]
+            SelectedRemote = remoteData.Object
             
-            bodyVelocity.Velocity = moveDirection
+            OrionLib:MakeNotification({
+                Name = "Выбрано",
+                Content = remoteData.Name .. " (" .. remoteData.Type .. ")",
+                Time = 2
+            })
+        end
+    end
+})
+
+RemoteListTab:AddSection({ Name = "Выполнение ремоута" })
+
+RemoteExecuteArgs = RemoteListTab:AddTextbox({
+    Name = "Аргументы",
+    Default = "",
+    TextDisappear = false,
+    Callback = function(val) end
+})
+
+RemoteListTab:AddButton({
+    Name = "Выполнить выбранный ремоут",
+    Callback = function()
+        if not SelectedRemote then
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Сначала выберите ремоут в таблице!",
+                Time = 3
+            })
+            return
         end
         
-        if bodyGyro then bodyGyro:Destroy() end
-        if bodyVelocity then bodyVelocity:Destroy() end
-        if humanoid then humanoid.PlatformStand = false end
-    end)
-end
-
--- ==================== FULL BRIGHT ====================
-local function toggleFullBright(state)
-    local character = LocalPlayer.Character
-    if not character then return end
-    
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    
-    if state then
-        local light = Instance.new("PointLight")
-        light.Brightness = 10
-        light.Range = 1000
-        light.Shadows = false
-        light.Parent = hrp
-        light.Name = "FTF_FullBright"
-    else
-        if hrp:FindFirstChild("FTF_FullBright") then
-            hrp.FTF_FullBright:Destroy()
-        end
-    end
-end
-
--- ==================== UI CONSTRUCTION ====================
-
--- Main Tab
-MainTab:AddSection({ Name = "Core Features" })
-
-MainTab:AddToggle({
-    Name = "Auto Hack",
-    Default = false,
-    Callback = function(val)
-        Settings.AutoHack = val
-        if val then startAutoHack() end
-    end
-})
-
-MainTab:AddSlider({
-    Name = "Auto Hack Range",
-    Min = 10, Max = 200, Default = 30, Increment = 5,
-    ValueName = "studs",
-    Callback = function(val) Settings.AutoHackRange = val end
-})
-
-MainTab:AddToggle({
-    Name = "Fly " .. (isMobile and "(Joystick)" or "(WASD)"),
-    Default = false,
-    Callback = function(val)
-        Settings.Fly = val
-        if val then startFly() end
-    end
-})
-
-MainTab:AddSlider({
-    Name = "Fly Speed",
-    Min = 20, Max = 200, Default = 50, Increment = 5,
-    ValueName = "studs/s",
-    Callback = function(val) Settings.FlySpeed = val end
-})
-
-MainTab:AddToggle({
-    Name = "Full Bright",
-    Default = false,
-    Callback = function(val)
-        Settings.FullBright = val
-        toggleFullBright(val)
-    end
-})
-
--- ESP Tab
-ESPTab:AddSection({ Name = "ESP Settings" })
-
-ESPTab:AddToggle({
-    Name = "Enable ESP",
-    Default = false,
-    Callback = function(val)
-        Settings.ESP.Enabled = val
-        toggleESP()
-    end
-})
-
-ESPTab:AddToggle({ Name = "Computers", Default = true, Callback = function(val) Settings.ESP.Computers = val; if Settings.ESP.Enabled then toggleESP() end end })
-ESPTab:AddToggle({ Name = "Exits", Default = true, Callback = function(val) Settings.ESP.Exits = val; if Settings.ESP.Enabled then toggleESP() end end })
-ESPTab:AddToggle({ Name = "Cryo Chambers", Default = true, Callback = function(val) Settings.ESP.CryoChambers = val; if Settings.ESP.Enabled then toggleESP() end end })
-ESPTab:AddToggle({ Name = "Beasts (objects)", Default = true, Callback = function(val) Settings.ESP.Beasts = val; if Settings.ESP.Enabled then toggleESP() end end })
-ESPTab:AddToggle({ Name = "Survivors", Default = true, Callback = function(val) Settings.ESP.Survivors = val; if Settings.ESP.Enabled then toggleESP() end end })
-ESPTab:AddToggle({ Name = "Beast Player", Default = true, Callback = function(val) Settings.ESP.BeastPlayer = val; if Settings.ESP.Enabled then toggleESP() end end })
-
--- Player Tab
-PlayerTab:AddSection({ Name = "Character Stats" })
-
-PlayerTab:AddSlider({
-    Name = "Walk Speed",
-    Min = 16, Max = 500, Default = 16, Increment = 1,
-    ValueName = "studs/s",
-    Callback = function(val)
-        Settings.Speed = val
-        local char = LocalPlayer.Character
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.WalkSpeed = val
-        end
-    end
-})
-
-PlayerTab:AddSlider({
-    Name = "Jump Power",
-    Min = 50, Max = 500, Default = 50, Increment = 5,
-    ValueName = "power",
-    Callback = function(val)
-        Settings.JumpPower = val
-        local char = LocalPlayer.Character
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.JumpPower = val
-        end
-    end
-})
-
-PlayerTab:AddToggle({
-    Name = "Infinite Jump",
-    Default = false,
-    Callback = function(val)
-        Settings.InfiniteJump = val
-        task.spawn(function()
-            while Settings.InfiniteJump do
-                local char = LocalPlayer.Character
-                if char and char:FindFirstChild("Humanoid") then
-                    char.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-                end
-                wait(0.05)
+        local args = parseArgs(RemoteExecuteArgs.Value)
+        local success, result = pcall(function()
+            if SelectedRemote:IsA("RemoteEvent") then
+                SelectedRemote:FireServer(unpack(args))
+                return "Выполнено"
+            else
+                return SelectedRemote:InvokeServer(unpack(args))
             end
         end)
+        
+        OrionLib:MakeNotification({
+            Name = "Результат",
+            Content = success and ("Успешно: " .. tostring(result)) or ("Ошибка: " .. tostring(result)),
+            Time = 5
+        })
     end
 })
 
-PlayerTab:AddToggle({
-    Name = "NoClip",
-    Default = false,
+-- Вкладка "Консоль"
+ConsoleTab:AddSection({ Name = "Мини-консоль" })
+
+ConsoleInput = ConsoleTab:AddTextbox({
+    Name = "Ввод команды",
+    Default = "",
+    TextDisappear = true,
     Callback = function(val)
-        Settings.NoClip = val
-        task.spawn(function()
-            while Settings.NoClip do
-                local char = LocalPlayer.Character
-                if char then
-                    for _, part in pairs(char:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            part.CanCollide = false
-                        end
-                    end
-                end
-                wait(0.1)
-            end
+        if val == "" then return end
+        
+        table.insert(ConsoleHistory, "> " .. val)
+        
+        local success, result = pcall(function()
+            return loadstring(val)()
         end)
+        
+        local output = success and tostring(result or "nil") or "Ошибка: " .. tostring(result)
+        table.insert(ConsoleHistory, output)
+        
+        -- Ограничение истории
+        while #ConsoleHistory > 50 do
+            table.remove(ConsoleHistory, 1)
+        end
+        
+        if ConsoleOutputLabel then
+            ConsoleOutputLabel:Set(table.concat(ConsoleHistory, "\n"))
+        end
     end
 })
 
--- Beast Tab
-BeastTab:AddSection({ Name = "Beast Tools" })
+ConsoleOutputLabel = ConsoleTab:AddLabel("Готов к работе...")
 
-BeastTab:AddToggle({
-    Name = "Anti-Freeze",
-    Default = false,
+ConsoleTab:AddButton({
+    Name = "Очистить консоль",
+    Callback = function()
+        ConsoleHistory = {}
+        if ConsoleOutputLabel then
+            ConsoleOutputLabel:Set("Готов к работе...")
+        end
+    end
+})
+
+ConsoleTab:AddButton({
+    Name = "Выполнить код из буфера",
+    Callback = function()
+        local success, result = pcall(function()
+            return loadstring(getclipboard())()
+        end)
+        
+        if success then
+            OrionLib:MakeNotification({
+                Name = "Успешно",
+                Content = "Код выполнен!",
+                Time = 3
+            })
+        else
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = tostring(result),
+                Time = 5
+            })
+        end
+    end
+})
+
+-- Вкладка "Настройки"
+SettingsTab:AddSection({ Name = "Настройки RemoteSpy" })
+
+SettingsTab:AddSlider({
+    Name = "Максимум записей в логе",
+    Min = 10, Max = 500, Default = 100, Increment = 10,
+    ValueName = "записей",
     Callback = function(val)
-        Settings.AntiFreeze = val
-        if val then startAntiFreeze() end
+        Settings.MaxLogEntries = val
     end
 })
 
-BeastTab:AddButton({
-    Name = "Teleport to Nearest Survivor",
+SettingsTab:AddToggle({
+    Name = "Сохранять логи в файл",
+    Default = true,
+    Callback = function(val)
+        Settings.SaveLogsToFile = val
+    end
+})
+
+SettingsTab:AddToggle({
+    Name = "Режим отладки (стек-трейс)",
+    Default = true,
+    Callback = function(val)
+        Settings.DebugMode = val
+    end
+})
+
+SettingsTab:AddButton({
+    Name = "Открыть папку с логами",
     Callback = function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        
-        local nearest = nil
-        local nearestDist = math.huge
-        
-        for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character then
-                local isBeast = player.Character:FindFirstChild("BeastPowers") or (player:GetAttribute("Role") == "Beast")
-                if not isBeast then
-                    local dist = (char.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
-                    if dist < nearestDist then
-                        nearestDist = dist
-                        nearest = player
-                    end
-                end
-            end
-        end
-        
-        if nearest then
-            char.HumanoidRootPart.CFrame = nearest.Character.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
-        end
+        OrionLib:MakeNotification({
+            Name = "Папка",
+            Content = "Логи сохраняются в: " .. SaveFolder,
+            Time = 5
+        })
     end
 })
 
--- Teleport Tab
-TeleportTab:AddSection({ Name = "Quick Teleports" })
-
-TeleportTab:AddButton({
-    Name = "TP to Nearest PC",
-    Callback = function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        
-        local objects = scanGame()
-        local nearest = nil
-        local nearestDist = math.huge
-        
-        for _, pc in pairs(objects.computers) do
-            local dist = (char.HumanoidRootPart.Position - pc:GetPivot().Position).Magnitude
-            if dist < nearestDist then
-                nearestDist = dist
-                nearest = pc
-            end
-        end
-        
-        if nearest then
-            char.HumanoidRootPart.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
-        end
-    end
-})
-
-TeleportTab:AddButton({
-    Name = "TP to Nearest Exit",
-    Callback = function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        
-        local objects = scanGame()
-        local nearest = nil
-        local nearestDist = math.huge
-        
-        for _, exit in pairs(objects.exitDoors) do
-            local dist = (char.HumanoidRootPart.Position - exit:GetPivot().Position).Magnitude
-            if dist < nearestDist then
-                nearestDist = dist
-                nearest = exit
-            end
-        end
-        
-        if nearest then
-            char.HumanoidRootPart.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
-        end
-    end
-})
-
-TeleportTab:AddButton({
-    Name = "TP to Cryo Chamber",
-    Callback = function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        
-        local objects = scanGame()
-        local nearest = nil
-        local nearestDist = math.huge
-        
-        for _, cryo in pairs(objects.cryoChambers) do
-            local dist = (char.HumanoidRootPart.Position - cryo:GetPivot().Position).Magnitude
-            if dist < nearestDist then
-                nearestDist = dist
-                nearest = cryo
-            end
-        end
-        
-        if nearest then
-            char.HumanoidRootPart.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
-        end
-    end
-})
-
--- Initialize
+-- Инициализация
+scanRemotes()
 OrionLib:Init()
 
 OrionLib:MakeNotification({
-    Name = "FTF Pro Loaded",
-    Content = "Enjoy the game!",
+    Name = "RemoteSpy Pro",
+    Content = "Скрипт загружен! Используйте вкладки для работы.",
     Time = 5
 })
