@@ -1,336 +1,623 @@
--- [[ FLEE THE FACILITY — LOGIC CORE (NO GUI) ]]
--- All toggles are plain booleans. Connect them to your GUI buttons.
+--[[
+    Flee The Facility - Orion UI Script
+    Based on analysis of game structure and Koala Hacks sources
+    Features:
+    - Accurate object detection (functional PCs, exit doors, beasts)
+    - ESP with role detection
+    - Auto Hack with anti-error
+    - Fly (PC + mobile support)
+    - Player mods (Speed, Jump, InfJump, NoClip)
+    - Beast tools (Anti-Freeze, Teleport to survivors)
+    - Teleports to PCs, exits, cryo chambers
+    - Full Bright
+]]
 
-local Players         = game:GetService("Players")
+-- Load Orion UI Library
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local RunService      = game:GetService("RunService")
-local Lighting        = game:GetService("Lighting")
-
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
-local Comp = 0
+local Camera = workspace.CurrentCamera
 
--- =============================================
--- HELPERS
--- =============================================
-local function IsThereChar(APlr)
-    local plr = APlr or LocalPlayer
-    if plr.Character and plr.Character:FindFirstChild("Humanoid") then
-        return true
-    end
-    return false
-end
+-- Platform detection
+local isMobile = UserInputService.TouchEnabled
 
--- =============================================
--- TOGGLES (set these from your GUI)
--- =============================================
-local T = {
-    -- Player
-    speedEnabled  = false,
-    speedValue    = 16,
-    jumpEnabled   = false,
-    jumpValue     = 50,
-    infiniteJump  = false,
-    fullbright    = false,
-    -- ESP
-    beastESP      = false,
-    playerESP     = false,
-    exitESP       = false,
-    podESP        = false,
-    computerESP   = false,
-    -- Misc
-    autoRemoveRope = false,
-    beastCrawl    = false,
-    antiPCError   = false,
+-- Welcome notification
+OrionLib:MakeNotification({
+    Name = "FTF Pro Script",
+    Content = isMobile and "Mobile version" or "PC version",
+    Time = 3
+})
+
+-- Main Window
+local Window = OrionLib:MakeWindow({
+    Name = "Flee The Facility | Pro",
+    HidePremium = false,
+    SaveConfig = true,
+    ConfigFolder = "FTF_Pro",
+    IntroEnabled = true,
+    IntroText = "Loading FTF Pro..."
+})
+
+-- Tabs
+local MainTab = Window:MakeTab({ Name = "Main", Icon = "rbxassetid://4483345998" })
+local ESPTab = Window:MakeTab({ Name = "ESP", Icon = "rbxassetid://4483345998" })
+local PlayerTab = Window:MakeTab({ Name = "Player", Icon = "rbxassetid://4483345998" })
+local BeastTab = Window:MakeTab({ Name = "Beast", Icon = "rbxassetid://4483345998" })
+local TeleportTab = Window:MakeTab({ Name = "Teleports", Icon = "rbxassetid://4483345998" })
+
+-- Settings
+local Settings = {
+    AutoHack = false,
+    AutoHackRange = 30,
+    ESP = {
+        Enabled = false,
+        Computers = true,
+        Exits = true,
+        CryoChambers = true,
+        Beasts = true,
+        Survivors = true,
+        BeastPlayer = true
+    },
+    Speed = 16,
+    JumpPower = 50,
+    InfiniteJump = false,
+    NoClip = false,
+    AntiFreeze = false,
+    Fly = false,
+    FlySpeed = 50,
+    FullBright = false
 }
 
--- =============================================
--- INFINITE JUMP
--- =============================================
-UserInputService.JumpRequest:Connect(function()
-    if T.infiniteJump and IsThereChar() then
-        LocalPlayer.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-    end
-end)
-
--- =============================================
--- ESP TABLES
--- =============================================
-local BeastHighlights   = {}
-local PlrHighlights     = {}
-local ExitHighlights    = {}
-local PodHighlights     = {}
-local PCHighlights      = {}
-
-local function clearHighlights(tbl)
-    for i = #tbl, 1, -1 do
-        if tbl[i] and tbl[i].Parent then tbl[i]:Destroy() end
-        table.remove(tbl, i)
-    end
-end
-
--- =============================================
--- ESP UPDATE FUNCTIONS
--- =============================================
-local function UpdateBeastESP()
-    -- Remove invalid
-    for i = #BeastHighlights, 1, -1 do
-        local h = BeastHighlights[i]
-        if not T.beastESP or h.Adornee == nil then
-            h:Destroy(); table.remove(BeastHighlights, i)
-        end
-    end
-    if not T.beastESP then return end
-    for _, v in pairs(Players:GetPlayers()) do
-        if v.Character and v.Character:FindFirstChild("BeastPowers") and v ~= LocalPlayer then
-            -- Check not already highlighted
-            local already = false
-            for _, h in pairs(BeastHighlights) do
-                if h.Adornee == v.Character then already = true; break end
-            end
-            if not already then
-                local h = Instance.new("Highlight")
-                h.Adornee = v.Character
-                h.Parent  = v.Character
-                table.insert(BeastHighlights, h)
-            end
-        end
-    end
-end
-
-local function UpdatePlrESP()
-    for i = #PlrHighlights, 1, -1 do
-        local h = PlrHighlights[i]
-        if not T.playerESP or h.Adornee == nil or h.Adornee.Parent == nil
-            or h.Adornee.Parent:FindFirstChild("BeastPowers") then
-            h:Destroy(); table.remove(PlrHighlights, i)
-        end
-    end
-    if not T.playerESP then return end
-    for _, v in pairs(Players:GetPlayers()) do
-        if v.Character and not v.Character:FindFirstChild("BeastPowers") and v ~= LocalPlayer then
-            local already = false
-            for _, h in pairs(PlrHighlights) do
-                if h.Adornee == v.Character then already = true; break end
-            end
-            if not already then
-                local h = Instance.new("Highlight")
-                h.Adornee   = v.Character
-                h.FillColor = Color3.fromRGB(0, 255, 0)
-                h.Parent    = v.Character
-                table.insert(PlrHighlights, h)
-            end
-        end
-    end
-end
-
-local function UpdateExitESP()
-    for i = #ExitHighlights, 1, -1 do
-        local h = ExitHighlights[i]
-        if not T.exitESP or h.Adornee == nil then
-            h:Destroy(); table.remove(ExitHighlights, i)
-        end
-    end
-    if not T.exitESP then return end
-    for _, v in pairs(game.Workspace:GetDescendants()) do
-        if v.Name == "ExitDoor" then
-            local already = false
-            for _, h in pairs(ExitHighlights) do
-                if h.Adornee == v then already = true; break end
-            end
-            if not already then
-                local h = Instance.new("Highlight")
-                h.Adornee   = v
-                h.FillColor = Color3.fromRGB(150, 255, 0)
-                h.Parent    = v
-                table.insert(ExitHighlights, h)
-            end
-        end
-    end
-end
-
-local function UpdatePodESP()
-    for i = #PodHighlights, 1, -1 do
-        local h = PodHighlights[i]
-        if not T.podESP or h.Adornee == nil then
-            h:Destroy(); table.remove(PodHighlights, i)
-        end
-    end
-    if not T.podESP then return end
-    for _, v in pairs(game.Workspace:GetDescendants()) do
-        if v.Name == "FreezePod" then
-            local already = false
-            for _, h in pairs(PodHighlights) do
-                if h.Adornee == v then already = true; break end
-            end
-            if not already then
-                local h = Instance.new("Highlight")
-                h.Adornee   = v
-                h.FillColor = Color3.fromRGB(0, 150, 255)
-                h.Parent    = v
-                table.insert(PodHighlights, h)
-            end
-        end
-    end
-end
-
-local function UpdateAllESP()
-    UpdatePlrESP()
-    UpdateBeastESP()
-    UpdateExitESP()
-    UpdatePodESP()
-end
-
--- =============================================
--- MAIN LOOP
--- =============================================
-task.spawn(function()
-    while true do
-        task.wait()
-
-        -- Speed
-        if IsThereChar() then
-            if T.speedEnabled then
-                LocalPlayer.Character.Humanoid.WalkSpeed = T.speedValue
-            end
-
-            -- Jump
-            if T.jumpEnabled then
-                LocalPlayer.Character.Humanoid.JumpPower = T.jumpValue
-            end
-
-            -- Fullbright
-            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                if T.fullbright and not hrp:FindFirstChild("KH_FullBright") then
-                    local light = Instance.new("PointLight", hrp)
-                    light.Name       = "KH_FullBright"
-                    light.Range      = math.huge
-                    light.Brightness = 2.5
-                    Lighting.GlobalShadows = false
-                elseif not T.fullbright and hrp:FindFirstChild("KH_FullBright") then
-                    hrp.KH_FullBright:Destroy()
-                    Lighting.GlobalShadows = true
-                end
-            end
-
-            -- Beast Crawl
-            local char = LocalPlayer.Character
-            if T.beastCrawl and char:FindFirstChild("CrawlScript") then
-                char.CrawlScript.Enabled = true
-            elseif char:FindFirstChild("BeastPowers") and char:FindFirstChild("CrawlScript") then
-                char.CrawlScript.Enabled = false
-            end
-
-            -- Auto Remove Rope
-            if T.autoRemoveRope and not LocalPlayer.Character:FindFirstChild("BeastPowers") then
-                for _, v in pairs(Players:GetPlayers()) do
-                    if IsThereChar(v) and v.Character:FindFirstChild("BeastPowers") then
-                        for _, v2 in pairs(v.Character:GetDescendants()) do
-                            if v2:IsA("RopeConstraint") then v2:Destroy() end
-                        end
+-- ==================== OBJECT SCANNER (ACCURATE) ====================
+local function scanGame()
+    local objects = {
+        computers = {},    -- functional PCs (with ProximityPrompt)
+        exitDoors = {},    -- escape exits
+        cryoChambers = {}, -- cryo chambers (if present)
+        beasts = {}        -- beast objects
+    }
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") then
+            local name = obj.Name:lower()
+            
+            -- Functional computers: must have an enabled ProximityPrompt
+            if name:find("computer") or name:find("pc") or name:find("laptop") then
+                for _, child in pairs(obj:GetDescendants()) do
+                    if child:IsA("ProximityPrompt") and child.Enabled then
+                        table.insert(objects.computers, obj)
+                        break
                     end
                 end
             end
+            
+            -- Exit doors
+            if name:find("exit") or name:find("escape") then
+                table.insert(objects.exitDoors, obj)
+            end
+            
+            -- Cryo chambers
+            if name:find("cryo") or name:find("chamber") then
+                table.insert(objects.cryoChambers, obj)
+            end
+            
+            -- Beast objects
+            if name:find("beast") or name:find("creature") then
+                table.insert(objects.beasts, obj)
+            end
         end
+    end
+    
+    return objects
+end
 
-        -- Anti PC Error
-        if T.antiPCError then
+-- ==================== ESP SYSTEM ====================
+local ESPConnections = {}
+local function toggleESP()
+    -- Cleanup old connections
+    for _, conn in pairs(ESPConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    ESPConnections = {}
+    
+    -- Remove existing highlights
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:FindFirstChild("FTF_ESP") then
+            obj.FTF_ESP:Destroy()
+        end
+    end
+    
+    if not Settings.ESP.Enabled then return end
+    
+    local function createHighlight(obj, color, text)
+        if obj:FindFirstChild("FTF_ESP") then return end
+        
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "FTF_ESP"
+        highlight.FillColor = color
+        highlight.OutlineColor = Color3.new(1, 1, 1)
+        highlight.FillTransparency = 0.3
+        highlight.OutlineTransparency = 0.2
+        highlight.Parent = obj
+        
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "FTF_ESP_Label"
+        billboard.Size = UDim2.new(0, 100, 0, 30)
+        billboard.StudsOffset = Vector3.new(0, 2, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Parent = obj
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 0.7
+        label.BackgroundColor3 = color
+        label.TextColor3 = Color3.new(1, 1, 1)
+        label.Text = text
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 12
+        label.Parent = billboard
+    end
+    
+    local connection = RunService.RenderStepped:Connect(function()
+        local objects = scanGame()
+        
+        if Settings.ESP.Computers then
+            for _, pc in pairs(objects.computers) do
+                createHighlight(pc, Color3.new(0, 1, 0), "💻 PC")
+            end
+        end
+        
+        if Settings.ESP.Exits then
+            for _, exit in pairs(objects.exitDoors) do
+                createHighlight(exit, Color3.new(0, 1, 1), "🚪 EXIT")
+            end
+        end
+        
+        if Settings.ESP.CryoChambers then
+            for _, cryo in pairs(objects.cryoChambers) do
+                createHighlight(cryo, Color3.new(0, 0.5, 1), "❄️ CRYO")
+            end
+        end
+        
+        if Settings.ESP.Beasts then
+            for _, beast in pairs(objects.beasts) do
+                createHighlight(beast, Color3.new(1, 0, 0), "👹 BEAST")
+            end
+        end
+        
+        -- Players with role detection (BeastPowers or Role attribute)
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local isBeast = false
+                if player.Character:FindFirstChild("BeastPowers") then
+                    isBeast = true
+                elseif player:GetAttribute("Role") == "Beast" then
+                    isBeast = true
+                end
+                
+                if isBeast and Settings.ESP.BeastPlayer then
+                    createHighlight(player.Character, Color3.new(1, 0, 0), "👹 " .. player.Name)
+                elseif not isBeast and Settings.ESP.Survivors then
+                    createHighlight(player.Character, Color3.new(0, 1, 0), "👤 " .. player.Name)
+                end
+            end
+        end
+    end)
+    
+    table.insert(ESPConnections, connection)
+end
+
+-- ==================== AUTO HACK ====================
+local function startAutoHack()
+    task.spawn(function()
+        while Settings.AutoHack do
             pcall(function()
-                game.ReplicatedStorage.RemoteEvent:FireServer("SetPlayerMinigameResult", true)
+                local character = LocalPlayer.Character
+                if not character then return end
+                
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                
+                local objects = scanGame()
+                local nearest = nil
+                local nearestDist = Settings.AutoHackRange
+                
+                for _, pc in pairs(objects.computers) do
+                    local dist = (hrp.Position - pc:GetPivot().Position).Magnitude
+                    if dist < nearestDist then
+                        nearestDist = dist
+                        nearest = pc
+                    end
+                end
+                
+                if nearest then
+                    hrp.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
+                    wait(0.2)
+                    
+                    for _, child in pairs(nearest:GetDescendants()) do
+                        if child:IsA("ProximityPrompt") and child.Enabled then
+                            fireproximityprompt(child)
+                            wait(child.HoldDuration + 0.2)
+                            
+                            -- Anti PC error (Koala method)
+                            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                            if remotes and remotes:FindFirstChild("ComputerError") then
+                                remotes.ComputerError:FireServer()
+                            end
+                            break
+                        end
+                    end
+                end
             end)
+            wait(0.5)
         end
+    end)
+end
 
-        -- Computer ESP
-        local GotComputers = 0
-        for _, v in pairs(game.Workspace:GetChildren()) do
-            if v:FindFirstChild("MapThumbnail") then
-                for _, v2 in pairs(v:GetChildren()) do
-                    if v2.Name == "ComputerTable" and v2:FindFirstChild("Screen") then
-                        GotComputers = GotComputers + 1
-                        if T.computerESP then
-                            local found = false
-                            for _, h in pairs(PCHighlights) do
-                                if h.Adornee == v2 then
-                                    h.FillColor = v2.Screen.Color
-                                    found = true
-                                end
-                            end
-                            if not found then
-                                local h = Instance.new("Highlight")
-                                h.FillColor = v2.Screen.Color
-                                h.Adornee   = v2
-                                h.Parent    = v2
-                                table.insert(PCHighlights, h)
-                            end
-                        else
-                            clearHighlights(PCHighlights)
+-- ==================== ANTI-FREEZE ====================
+local function startAntiFreeze()
+    task.spawn(function()
+        while Settings.AntiFreeze do
+            local character = LocalPlayer.Character
+            if character then
+                local humanoid = character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.PlatformStand = false
+                    humanoid.WalkSpeed = Settings.Speed
+                    humanoid.JumpPower = Settings.JumpPower
+                    
+                    for _, effect in pairs(character:GetDescendants()) do
+                        if effect:IsA("ParticleEmitter") and effect.Name:lower():find("freeze") then
+                            effect.Enabled = false
                         end
                     end
                 end
             end
+            wait(0.1)
         end
+    end)
+end
 
-        -- Auto refresh ESPs on round change
-        if GotComputers ~= Comp then
-            task.spawn(function()
-                if GotComputers == 0 then
-                    task.wait(1)
-                    UpdatePlrESP()
-                    UpdateExitESP()
-                    UpdatePodESP()
-                    UpdateBeastESP()
-                else
-                    task.wait(3)
-                    UpdatePlrESP()
-                    UpdateExitESP()
-                    UpdatePodESP()
-                    task.wait(15)
-                    UpdateBeastESP()
+-- ==================== FLY (PC + MOBILE) ====================
+local function startFly()
+    local player = LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:WaitForChild("Humanoid")
+    
+    local bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.P = 9e4
+    bodyGyro.Parent = hrp
+    bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bodyVelocity.Parent = hrp
+    
+    task.spawn(function()
+        while Settings.Fly and hrp and humanoid do
+            wait()
+            humanoid.PlatformStand = true
+            bodyGyro.CFrame = Camera.CFrame
+            
+            local moveDirection = Vector3.new(0, 0, 0)
+            
+            if isMobile then
+                local joystick = UserInputService:GetJoystickState()
+                if joystick.Position.Magnitude > 0.1 then
+                    moveDirection = Vector3.new(joystick.Position.X, 0, -joystick.Position.Y) * Settings.FlySpeed
                 end
-            end)
-            Comp = GotComputers
+            else
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                    moveDirection += Camera.CFrame.LookVector * Settings.FlySpeed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                    moveDirection -= Camera.CFrame.LookVector * Settings.FlySpeed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                    moveDirection -= Camera.CFrame.RightVector * Settings.FlySpeed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                    moveDirection += Camera.CFrame.RightVector * Settings.FlySpeed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                    moveDirection += Vector3.new(0, Settings.FlySpeed, 0)
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+                    moveDirection -= Vector3.new(0, Settings.FlySpeed, 0)
+                end
+            end
+            
+            bodyVelocity.Velocity = moveDirection
+        end
+        
+        if bodyGyro then bodyGyro:Destroy() end
+        if bodyVelocity then bodyVelocity:Destroy() end
+        if humanoid then humanoid.PlatformStand = false end
+    end)
+end
+
+-- ==================== FULL BRIGHT ====================
+local function toggleFullBright(state)
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    if state then
+        local light = Instance.new("PointLight")
+        light.Brightness = 10
+        light.Range = 1000
+        light.Shadows = false
+        light.Parent = hrp
+        light.Name = "FTF_FullBright"
+    else
+        if hrp:FindFirstChild("FTF_FullBright") then
+            hrp.FTF_FullBright:Destroy()
         end
     end
-end)
-
--- =============================================
--- SPEED/JUMP RESET ON DISABLE (call from GUI)
--- =============================================
-local function OnSpeedDisabled()
-    if IsThereChar() then
-        LocalPlayer.Character.Humanoid.WalkSpeed = 16
-    end
 end
 
-local function OnJumpDisabled()
-    if IsThereChar() then
-        LocalPlayer.Character.Humanoid.JumpPower = 50
-    end
-end
+-- ==================== UI CONSTRUCTION ====================
 
--- =============================================
--- PUBLIC API
--- =============================================
--- T.speedEnabled  = true/false
--- T.speedValue    = number (16-128)
--- T.jumpEnabled   = true/false
--- T.jumpValue     = number (50-300)
--- T.infiniteJump  = true/false
--- T.fullbright    = true/false
--- T.beastESP      = true/false
--- T.playerESP     = true/false
--- T.exitESP       = true/false
--- T.podESP        = true/false
--- T.computerESP   = true/false
--- T.autoRemoveRope = true/false
--- T.beastCrawl    = true/false
--- T.antiPCError   = true/false
---
--- Call from GUI:
---   OnSpeedDisabled()   -- when speed toggle turned off
---   OnJumpDisabled()    -- when jump toggle turned off
---   UpdateAllESP()      -- manual refresh button
---   UpdateBeastESP()
---   UpdatePlrESP()
---   UpdateExitESP()
---   UpdatePodESP()
+-- Main Tab
+MainTab:AddSection({ Name = "Core Features" })
+
+MainTab:AddToggle({
+    Name = "Auto Hack",
+    Default = false,
+    Callback = function(val)
+        Settings.AutoHack = val
+        if val then startAutoHack() end
+    end
+})
+
+MainTab:AddSlider({
+    Name = "Auto Hack Range",
+    Min = 10, Max = 200, Default = 30, Increment = 5,
+    ValueName = "studs",
+    Callback = function(val) Settings.AutoHackRange = val end
+})
+
+MainTab:AddToggle({
+    Name = "Fly " .. (isMobile and "(Joystick)" or "(WASD)"),
+    Default = false,
+    Callback = function(val)
+        Settings.Fly = val
+        if val then startFly() end
+    end
+})
+
+MainTab:AddSlider({
+    Name = "Fly Speed",
+    Min = 20, Max = 200, Default = 50, Increment = 5,
+    ValueName = "studs/s",
+    Callback = function(val) Settings.FlySpeed = val end
+})
+
+MainTab:AddToggle({
+    Name = "Full Bright",
+    Default = false,
+    Callback = function(val)
+        Settings.FullBright = val
+        toggleFullBright(val)
+    end
+})
+
+-- ESP Tab
+ESPTab:AddSection({ Name = "ESP Settings" })
+
+ESPTab:AddToggle({
+    Name = "Enable ESP",
+    Default = false,
+    Callback = function(val)
+        Settings.ESP.Enabled = val
+        toggleESP()
+    end
+})
+
+ESPTab:AddToggle({ Name = "Computers", Default = true, Callback = function(val) Settings.ESP.Computers = val; if Settings.ESP.Enabled then toggleESP() end end })
+ESPTab:AddToggle({ Name = "Exits", Default = true, Callback = function(val) Settings.ESP.Exits = val; if Settings.ESP.Enabled then toggleESP() end end })
+ESPTab:AddToggle({ Name = "Cryo Chambers", Default = true, Callback = function(val) Settings.ESP.CryoChambers = val; if Settings.ESP.Enabled then toggleESP() end end })
+ESPTab:AddToggle({ Name = "Beasts (objects)", Default = true, Callback = function(val) Settings.ESP.Beasts = val; if Settings.ESP.Enabled then toggleESP() end end })
+ESPTab:AddToggle({ Name = "Survivors", Default = true, Callback = function(val) Settings.ESP.Survivors = val; if Settings.ESP.Enabled then toggleESP() end end })
+ESPTab:AddToggle({ Name = "Beast Player", Default = true, Callback = function(val) Settings.ESP.BeastPlayer = val; if Settings.ESP.Enabled then toggleESP() end end })
+
+-- Player Tab
+PlayerTab:AddSection({ Name = "Character Stats" })
+
+PlayerTab:AddSlider({
+    Name = "Walk Speed",
+    Min = 16, Max = 500, Default = 16, Increment = 1,
+    ValueName = "studs/s",
+    Callback = function(val)
+        Settings.Speed = val
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            char.Humanoid.WalkSpeed = val
+        end
+    end
+})
+
+PlayerTab:AddSlider({
+    Name = "Jump Power",
+    Min = 50, Max = 500, Default = 50, Increment = 5,
+    ValueName = "power",
+    Callback = function(val)
+        Settings.JumpPower = val
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            char.Humanoid.JumpPower = val
+        end
+    end
+})
+
+PlayerTab:AddToggle({
+    Name = "Infinite Jump",
+    Default = false,
+    Callback = function(val)
+        Settings.InfiniteJump = val
+        task.spawn(function()
+            while Settings.InfiniteJump do
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChild("Humanoid") then
+                    char.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+                wait(0.05)
+            end
+        end)
+    end
+})
+
+PlayerTab:AddToggle({
+    Name = "NoClip",
+    Default = false,
+    Callback = function(val)
+        Settings.NoClip = val
+        task.spawn(function()
+            while Settings.NoClip do
+                local char = LocalPlayer.Character
+                if char then
+                    for _, part in pairs(char:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.CanCollide = false
+                        end
+                    end
+                end
+                wait(0.1)
+            end
+        end)
+    end
+})
+
+-- Beast Tab
+BeastTab:AddSection({ Name = "Beast Tools" })
+
+BeastTab:AddToggle({
+    Name = "Anti-Freeze",
+    Default = false,
+    Callback = function(val)
+        Settings.AntiFreeze = val
+        if val then startAntiFreeze() end
+    end
+})
+
+BeastTab:AddButton({
+    Name = "Teleport to Nearest Survivor",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        
+        local nearest = nil
+        local nearestDist = math.huge
+        
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local isBeast = player.Character:FindFirstChild("BeastPowers") or (player:GetAttribute("Role") == "Beast")
+                if not isBeast then
+                    local dist = (char.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                    if dist < nearestDist then
+                        nearestDist = dist
+                        nearest = player
+                    end
+                end
+            end
+        end
+        
+        if nearest then
+            char.HumanoidRootPart.CFrame = nearest.Character.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
+        end
+    end
+})
+
+-- Teleport Tab
+TeleportTab:AddSection({ Name = "Quick Teleports" })
+
+TeleportTab:AddButton({
+    Name = "TP to Nearest PC",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        
+        local objects = scanGame()
+        local nearest = nil
+        local nearestDist = math.huge
+        
+        for _, pc in pairs(objects.computers) do
+            local dist = (char.HumanoidRootPart.Position - pc:GetPivot().Position).Magnitude
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = pc
+            end
+        end
+        
+        if nearest then
+            char.HumanoidRootPart.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
+        end
+    end
+})
+
+TeleportTab:AddButton({
+    Name = "TP to Nearest Exit",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        
+        local objects = scanGame()
+        local nearest = nil
+        local nearestDist = math.huge
+        
+        for _, exit in pairs(objects.exitDoors) do
+            local dist = (char.HumanoidRootPart.Position - exit:GetPivot().Position).Magnitude
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = exit
+            end
+        end
+        
+        if nearest then
+            char.HumanoidRootPart.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
+        end
+    end
+})
+
+TeleportTab:AddButton({
+    Name = "TP to Cryo Chamber",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        
+        local objects = scanGame()
+        local nearest = nil
+        local nearestDist = math.huge
+        
+        for _, cryo in pairs(objects.cryoChambers) do
+            local dist = (char.HumanoidRootPart.Position - cryo:GetPivot().Position).Magnitude
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = cryo
+            end
+        end
+        
+        if nearest then
+            char.HumanoidRootPart.CFrame = nearest:GetPivot().CFrame + Vector3.new(0, 2, 0)
+        end
+    end
+})
+
+-- Initialize
+OrionLib:Init()
+
+OrionLib:MakeNotification({
+    Name = "FTF Pro Loaded",
+    Content = "Enjoy the game!",
+    Time = 5
+})
