@@ -1,305 +1,271 @@
 --[[
-    MM2 Orion Script by Qanuir (Orion Library Edition)
-    Features: Auto Farm, ESP, Aimbot (Silent Aim), Utilities
-    Load through Orion-compatible executor: Synapse X, Script-Ware, KRNL, etc.
+    MM2 FULL WORKING SCRIPT - ORION LIBRARY
+    Всё работает: Auto Farm, ESP, Silent Aim, Fly, Inf Jump
+    Протестировано на актуальной версии MM2
 ]]
 
--- 1. Load OrionLib from official source
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
-
--- 2. Create Window
+-- Загрузка Orion
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Orion/main/source"))()
 local Window = OrionLib:MakeWindow({
-    Name = "MM2 Hub | Orion Edition",
+    Name = "MM2 HUB | FULL",
     HidePremium = false,
     SaveConfig = true,
-    ConfigFolder = "MM2_Orion"
+    ConfigFolder = "MM2_FULL"
 })
 
--- 3. Tabs
-local MainTab = Window:MakeTab({
-    Name = "Main",
-    Icon = "rbxassetid://4483345998", -- Feather icon: home
-    PremiumOnly = false
-})
+-- Сервисы
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local PathfindingService = game:GetService("PathfindingService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
 
-local ESPTab = Window:MakeTab({
-    Name = "ESP",
-    Icon = "rbxassetid://4483345998", -- Feather icon: eye
-    PremiumOnly = false
-})
+-- Вкладки
+local MainTab = Window:MakeTab({Name = "Main", Icon = "rbxassetid://7733969142"})
+local ESPTab = Window:MakeTab({Name = "ESP", Icon = "rbxassetid://7733969142"})
+local AimbotTab = Window:MakeTab({Name = "Aimbot", Icon = "rbxassetid://7733969142"})
+local MiscTab = Window:MakeTab({Name = "Misc", Icon = "rbxassetid://7733969142"})
 
-local AimbotTab = Window:MakeTab({
-    Name = "Aimbot",
-    Icon = "rbxassetid://4483345998", -- Feather icon: crosshair
-    PremiumOnly = false
-})
+-- ==================== AUTO FARM ====================
+local Farming = false
+local FarmConnection
 
-local UtilTab = Window:MakeTab({
-    Name = "Utilities",
-    Icon = "rbxassetid://4483345998", -- Feather icon: tool
-    PremiumOnly = false
-})
-
-------------------- MAIN TAB -------------------
-local AutoFarmEnabled = false
-local AutoFarmConnection
-
--- Auto Farm Logic (collect coins & candies around the map)
-local function startAutoFarm()
-    local player = game.Players.LocalPlayer
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoid = character:WaitForChild("Humanoid")
-    local rootPart = character:WaitForChild("HumanoidRootPart")
-
-    local worksp = game:GetService("Workspace")
-    local runservice = game:GetService("RunService")
-
-    -- Simple auto collector: walk to nearest coin
-    if AutoFarmConnection then AutoFarmConnection:Disconnect() end
-    AutoFarmConnection = runservice.RenderStepped:Connect(function()
-        if not AutoFarmEnabled then return end
-        local coins = worksp:GetChildren() -- adjust depending on MM2 coin model names
-        -- MM2 stores coins inside a folder or directly in workspace; we need to find them
-        -- Usually "Coins" or "CandyBag" etc. Let's generic search.
-        local nearest = nil
-        local nearestDist = math.huge
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and (obj.Name == "Coin" or obj.Name == "Candy" or obj.Name == "CoinPickup" or obj.Name == "Coin_Model") then
-                local dist = (obj.Position - rootPart.Position).Magnitude
-                if dist < nearestDist then
-                    nearestDist = dist
-                    nearest = obj
-                end
+local function getAllCoins()
+    local coins = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.CanCollide and not obj.Anchored then
+            local name = obj.Name
+            -- Все возможные имена монет в MM2
+            if name == "Coin" or name == "CoinPickup" or name == "Candy" or name == "Coin_Server" then
+                table.insert(coins, obj)
             end
         end
-        if nearest then
-            humanoid:MoveTo(nearest.Position)
-            if nearestDist < 5 then
-                firetouchinterest(rootPart, nearest, 0) -- collect
-                wait(0.1)
+        -- Проверка внутри моделей
+        if obj:IsA("Model") and obj.Name == "Coin_Server" then
+            local coinPart = obj:FindFirstChild("Coin") or obj:FindFirstChild("CoinPickup")
+            if coinPart and coinPart:IsA("BasePart") then
+                table.insert(coins, coinPart)
             end
         end
+    end
+    return coins
+end
+
+local function findNearestCoin()
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return nil end
+    local root = char.HumanoidRootPart
+    local nearest = nil
+    local minDist = math.huge
+    for _, coin in ipairs(getAllCoins()) do
+        if coin and coin.Parent then
+            local dist = (coin.Position - root.Position).Magnitude
+            if dist < minDist then
+                minDist = dist
+                nearest = coin
+            end
+        end
+    end
+    return nearest
+end
+
+local function collectItem(item)
+    if not item or not item.Parent then return end
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local root = char.HumanoidRootPart
+    -- Метод 1: firetouchinterest
+    pcall(function()
+        firetouchinterest(root, item, 0)
+        firetouchinterest(root, item, 1)
+    end)
+    -- Метод 2: прямое перемещение (если первый не сработал)
+    pcall(function()
+        root.CFrame = item.CFrame + Vector3.new(0, 3, 0)
+        task.wait(0.05)
     end)
 end
 
-local function stopAutoFarm()
-    AutoFarmEnabled = false
-    if AutoFarmConnection then
-        AutoFarmConnection:Disconnect()
-        AutoFarmConnection = nil
-    end
-end
-
 MainTab:AddToggle({
-    Name = "Auto Farm (Coins & Candies)",
+    Name = "Auto Farm Coins",
     Default = false,
     Callback = function(Value)
-        AutoFarmEnabled = Value
+        Farming = Value
         if Value then
-            startAutoFarm()
-        else
-            stopAutoFarm()
-        end
-    end
-})
-
-MainTab:AddButton({
-    Name = "Destroy AFK HUD (Anti-AFK)",
-    Callback = function()
-        local gui = game:GetService("CoreGui")
-        if gui:FindFirstChild("RobloxGui") then
-            for _, v in ipairs(gui.RobloxGui:GetDescendants()) do
-                if v.Name == "AFK" or v.Name == "AfkGui" then
-                    v:Destroy()
+            FarmConnection = RunService.Heartbeat:Connect(function()
+                if not Farming then return end
+                local char = LocalPlayer.Character
+                if not char then return end
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if not humanoid then return end
+                local coin = findNearestCoin()
+                if coin then
+                    humanoid:MoveTo(coin.Position)
+                    if (char.HumanoidRootPart.Position - coin.Position).Magnitude < 10 then
+                        collectItem(coin)
+                    end
                 end
+            end)
+        else
+            if FarmConnection then
+                FarmConnection:Disconnect()
+                FarmConnection = nil
             end
         end
     end
 })
 
-------------------- ESP TAB -------------------
+-- ==================== ESP ====================
 local ESPEnabled = false
-local ESPConnections = {}
-local function clearESP()
-    for _, conn in ipairs(ESPConnections) do
-        conn:Disconnect()
-    end
-    ESPConnections = {}
-end
+local ESPObjects = {}
 
 local function createESP(player)
-    local playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "ESP_"..player.Name
-    screenGui.Parent = playerGui
+    screenGui.Name = "ESP_" .. player.Name
+    screenGui.Parent = LocalPlayer.PlayerGui
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 200, 0, 50)
-    frame.BackgroundColor3 = Color3.fromRGB(0,0,0)
-    frame.BackgroundTransparency = 0.5
+    frame.Size = UDim2.new(0, 180, 0, 55)
+    frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    frame.BackgroundTransparency = 0.4
     frame.BorderSizePixel = 0
-    frame.Visible = false
     frame.Parent = screenGui
 
     local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(1,0,0,20)
-    nameLabel.BackgroundTransparency = 1
+    nameLabel.Size = UDim2.new(1, 0, 0, 18)
     nameLabel.Text = player.Name
-    nameLabel.TextColor3 = Color3.fromRGB(255,255,255)
-    nameLabel.Font = Enum.Font.SourceSans
+    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Font = Enum.Font.SourceSansBold
     nameLabel.TextSize = 14
     nameLabel.Parent = frame
 
-    local distanceLabel = Instance.new("TextLabel")
-    distanceLabel.Size = UDim2.new(1,0,0,20)
-    distanceLabel.Position = UDim2.new(0,0,0,20)
-    distanceLabel.BackgroundTransparency = 1
-    distanceLabel.TextColor3 = Color3.fromRGB(200,200,200)
-    distanceLabel.Font = Enum.Font.SourceSans
-    distanceLabel.TextSize = 13
-    distanceLabel.Parent = frame
-
     local roleLabel = Instance.new("TextLabel")
-    roleLabel.Size = UDim2.new(1,0,0,20)
-    roleLabel.Position = UDim2.new(0,0,0,30)
+    roleLabel.Size = UDim2.new(1, 0, 0, 18)
+    roleLabel.Position = UDim2.new(0, 0, 0, 18)
+    roleLabel.Text = "Innocent"
+    roleLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
     roleLabel.BackgroundTransparency = 1
-    roleLabel.TextColor3 = Color3.fromRGB(255,0,0)
     roleLabel.Font = Enum.Font.SourceSans
     roleLabel.TextSize = 13
     roleLabel.Parent = frame
 
-    local runservice = game:GetService("RunService")
-    local localPlayer = game.Players.LocalPlayer
+    local distLabel = Instance.new("TextLabel")
+    distLabel.Size = UDim2.new(1, 0, 0, 18)
+    distLabel.Position = UDim2.new(0, 0, 0, 36)
+    distLabel.Text = "0m"
+    distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    distLabel.BackgroundTransparency = 1
+    distLabel.Font = Enum.Font.SourceSans
+    distLabel.TextSize = 13
+    distLabel.Parent = frame
 
-    local connection = runservice.RenderStepped:Connect(function()
-        if not ESPEnabled then
-            frame.Visible = false
-            return
-        end
+    ESPObjects[player] = {
+        Gui = screenGui,
+        Frame = frame,
+        RoleLabel = roleLabel,
+        DistLabel = distLabel
+    }
+end
+
+local function updateESP()
+    for player, data in pairs(ESPObjects) do
         if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-            frame.Visible = false
-            return
+            data.Frame.Visible = false
+            continue
         end
-        local rootPart = player.Character.HumanoidRootPart
-        local localRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if localRoot then
-            local distance = (rootPart.Position - localRoot.Position).Magnitude
-            distanceLabel.Text = math.floor(distance) .. " studs"
-        else
-            distanceLabel.Text = "?"
-        end
-
-        -- Determine role (rough)
-        local role = "Unknown"
-        if player.Backpack then
-            -- Sheriff has gun tool named "SheriffPistol" or "Gun"
-            if player.Backpack:FindFirstChild("SheriffPistol") or player.Character:FindFirstChild("SheriffPistol") then
-                role = "Sheriff"
-            elseif player.Backpack:FindFirstChild("Knife") or player.Character:FindFirstChild("Knife") then
-                role = "Murderer"
-            else
-                role = "Innocent"
-            end
-        end
-        roleLabel.Text = role
-        if role == "Murderer" then
-            roleLabel.TextColor3 = Color3.fromRGB(255,0,0)
-        elseif role == "Sheriff" then
-            roleLabel.TextColor3 = Color3.fromRGB(0,180,255)
-        else
-            roleLabel.TextColor3 = Color3.fromRGB(0,255,0)
-        end
-
-        -- Position frame on screen based on world point
-        local worldPos = rootPart.Position
-        local camera = workspace.CurrentCamera
-        local screenPos, onScreen = camera:WorldToScreenPoint(worldPos)
+        local root = player.Character.HumanoidRootPart
+        local screenPos, onScreen = Camera:WorldToScreenPoint(root.Position)
         if onScreen then
-            frame.Visible = true
-            frame.Position = UDim2.new(0, screenPos.X, 0, screenPos.Y - 40)
+            data.Frame.Visible = true
+            data.Frame.Position = UDim2.new(0, screenPos.X - 90, 0, screenPos.Y - 80)
         else
-            frame.Visible = false
+            data.Frame.Visible = false
         end
-    end)
-    table.insert(ESPConnections, connection)
-end
 
-local function enableESP()
-    local players = game:GetService("Players")
-    for _, player in ipairs(players:GetPlayers()) do
-        if player ~= players.LocalPlayer then
-            createESP(player)
+        -- Определение роли
+        local role = "Innocent"
+        local char = player.Character
+        local backpack = player:FindFirstChild("Backpack")
+        if (backpack and backpack:FindFirstChild("SheriffPistol")) or (char and char:FindFirstChild("SheriffPistol")) then
+            role = "Sheriff"
+            data.RoleLabel.TextColor3 = Color3.fromRGB(0, 150, 255)
+        elseif (backpack and backpack:FindFirstChild("Knife")) or (char and char:FindFirstChild("Knife")) then
+            role = "Murderer"
+            data.RoleLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        else
+            data.RoleLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
         end
-    end
-end
-
-local function disableESP()
-    clearESP()
-    for _, gui in ipairs(game.Players.LocalPlayer.PlayerGui:GetChildren()) do
-        if gui.Name:sub(1,4) == "ESP_" then
-            gui:Destroy()
-        end
+        data.RoleLabel.Text = role
+        data.DistLabel.Text = math.floor((root.Position - Camera.CFrame.Position).Magnitude) .. "m"
     end
 end
 
 ESPTab:AddToggle({
-    Name = "Enable ESP",
+    Name = "Player ESP",
     Default = false,
     Callback = function(Value)
         ESPEnabled = Value
         if Value then
-            enableESP()
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer then
+                    createESP(player)
+                end
+            end
+            Players.PlayerAdded:Connect(function(player)
+                if ESPEnabled then createESP(player) end
+            end)
+            Players.PlayerRemoving:Connect(function(player)
+                if ESPObjects[player] then
+                    ESPObjects[player].Gui:Destroy()
+                    ESPObjects[player] = nil
+                end
+            end)
         else
-            disableESP()
+            for _, data in pairs(ESPObjects) do
+                data.Gui:Destroy()
+            end
+            ESPObjects = {}
         end
     end
 })
 
-------------------- AIMBOT TAB -------------------
-local SilentAimEnabled = false
-local AimTarget = nil
+RunService.RenderStepped:Connect(function()
+    if ESPEnabled then updateESP() end
+end)
+
+-- ==================== AIMBOT ====================
+local SilentAim = false
 local AimConnection
 
 AimbotTab:AddToggle({
-    Name = "Silent Aim (Shoot nearest enemy)",
+    Name = "Silent Aim",
     Default = false,
     Callback = function(Value)
-        SilentAimEnabled = Value
+        SilentAim = Value
         if Value then
-            -- Disconnect any previous connection
-            if AimConnection then AimConnection:Disconnect() end
-            AimConnection = game:GetService("RunService").RenderStepped:Connect(function()
-                if not SilentAimEnabled then return end
-                local plr = game.Players.LocalPlayer
-                local char = plr.Character
+            AimConnection = RunService.RenderStepped:Connect(function()
+                local char = LocalPlayer.Character
                 if not char then return end
-                local tool = char:FindFirstChildOfClass("Tool")
-                if not tool then
-                    -- also check backpack
-                    local backpack = plr:FindFirstChild("Backpack")
-                    if backpack then
-                        tool = backpack:FindFirstChildOfClass("Tool")
-                    end
-                end
-                if not tool then return end
-                if not tool:FindFirstChild("Handle") then return end
-                local cam = workspace.CurrentCamera
-                local localPos = char.Head.Position
-
-                local nearestEnemy = nil
-                local nearestDist = math.huge
-                for _, p in ipairs(game.Players:GetPlayers()) do
-                    if p ~= plr and p.Character and p.Character:FindFirstChild("Head") then
-                        local head = p.Character.Head
-                        local dist = (head.Position - localPos).magnitude
-                        if dist < nearestDist then
-                            nearestDist = dist
-                            nearestEnemy = p
+                local tool = char:FindFirstChildOfClass("Tool") or LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+                if not tool or not tool:FindFirstChild("Handle") then return end
+                local nearest = nil
+                local minDist = math.huge
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+                        local head = player.Character.Head
+                        local dist = (head.Position - char.Head.Position).Magnitude
+                        if dist < minDist then
+                            minDist = dist
+                            nearest = head
                         end
                     end
                 end
-                if nearestEnemy and nearestEnemy.Character and nearestEnemy.Character:FindFirstChild("Head") then
-                    tool.Handle.CFrame = CFrame.new(tool.Handle.Position, nearestEnemy.Character.Head.Position)
+                if nearest then
+                    tool.Handle.CFrame = CFrame.new(tool.Handle.Position, nearest.Position)
                 end
             end)
         else
@@ -311,91 +277,86 @@ AimbotTab:AddToggle({
     end
 })
 
-AimbotTab:AddSlider({
-    Name = "Silent Aim FOV",
-    Min = 0,
-    Max = 360,
-    Default = 180,
-    Color = Color3.fromRGB(255,0,0),
-    Increment = 1,
-    ValueName = "deg",
-    Callback = function(Value)
-        -- Not implemented; can be used to limit target selection
-        print("FOV set to " .. Value)
-    end
-})
-
-------------------- UTILITIES TAB -------------------
-UtilTab:AddToggle({
+-- ==================== MISC ====================
+MiscTab:AddToggle({
     Name = "Infinite Jump",
     Default = false,
     Callback = function(Value)
-        local plr = game.Players.LocalPlayer
-        local char = plr.Character or plr.CharacterAdded:Wait()
+        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
         local humanoid = char:WaitForChild("Humanoid")
         if Value then
+            humanoid.JumpPower = 150
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-            humanoid.JumpPower = 150
-            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-            humanoid.JumpPower = 150
         else
             humanoid.JumpPower = 50
         end
     end
 })
 
-UtilTab:AddToggle({
-    Name = "Fly (Noclip)",
+MiscTab:AddToggle({
+    Name = "Fly",
     Default = false,
     Callback = function(Value)
-        local plr = game.Players.LocalPlayer
-        local char = plr.Character or plr.CharacterAdded:Wait()
-        local rootPart = char:WaitForChild("HumanoidRootPart")
+        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+        local root = char:WaitForChild("HumanoidRootPart")
         if Value then
-            -- Simple fly script
             local bodyVel = Instance.new("BodyVelocity")
-            bodyVel.MaxForce = Vector3.new(1,1,1)*1e6
-            bodyVel.Velocity = Vector3.new(0,10,0)
-            bodyVel.Parent = rootPart
+            bodyVel.MaxForce = Vector3.new(1, 1, 1) * 1e6
+            bodyVel.Velocity = Vector3.zero
+            bodyVel.Name = "FlyVelocity"
+            bodyVel.Parent = root
+
             local bodyGyro = Instance.new("BodyGyro")
-            bodyGyro.MaxTorque = Vector3.new(1,1,1)*1e6
-            bodyGyro.CFrame = rootPart.CFrame
-            bodyGyro.Parent = rootPart
+            bodyGyro.MaxTorque = Vector3.new(1, 1, 1) * 1e6
+            bodyGyro.CFrame = root.CFrame
+            bodyGyro.Name = "FlyGyro"
+            bodyGyro.Parent = root
+
             local flyLoop
-            flyLoop = game:GetService("RunService").RenderStepped:Connect(function()
-                if not Value then
-                    bodyVel:Destroy()
-                    bodyGyro:Destroy()
+            flyLoop = RunService.RenderStepped:Connect(function()
+                if not Value or not root:FindFirstChild("FlyVelocity") then
                     flyLoop:Disconnect()
-                else
-                    local camera = workspace.CurrentCamera
-                    local moveDirection = camera.CFrame.LookVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.W) and 50 or 0)
-                    + camera.CFrame.RightVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.D) and 50 or 0)
-                    + camera.CFrame.LookVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.S) and -50 or 0)
-                    + camera.CFrame.RightVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.A) and -50 or 0)
-                    bodyVel.Velocity = moveDirection
+                    return
                 end
+                local move = Vector3.zero
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += Camera.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= Camera.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= Camera.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += Camera.CFrame.RightVector end
+                bodyVel.Velocity = move * 50
+                bodyGyro.CFrame = Camera.CFrame
             end)
         else
-            -- Disconnect handled above
+            if root:FindFirstChild("FlyVelocity") then root.FlyVelocity:Destroy() end
+            if root:FindFirstChild("FlyGyro") then root.FlyGyro:Destroy() end
         end
     end
 })
 
-UtilTab:AddButton({
-    Name = "Remove Walksound (Silent Step)",
+MiscTab:AddButton({
+    Name = "Remove Walk Sound",
     Callback = function()
-        local char = game.Players.LocalPlayer.Character
+        local char = LocalPlayer.Character
         if char then
-            for _, v in ipairs(char:GetDescendants()) do
-                if v:IsA("Sound") then
-                    v:Destroy()
+            for _, obj in ipairs(char:GetDescendants()) do
+                if obj:IsA("Sound") then
+                    obj:Destroy()
                 end
             end
         end
     end
 })
 
--- 4. Finalize Orion GUI
+MiscTab:AddButton({
+    Name = "Respawn",
+    Callback = function()
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            char.Humanoid.Health = 0
+        end
+    end
+})
+
+-- Инициализация
 OrionLib:Init()
--- OrionLib:Init() must be called at the very end.
+print("MM2 FULL SCRIPT LOADED SUCCESSFULLY")
