@@ -1,9 +1,37 @@
 --[[
-    🔥 DAYCARE MEGA EXPLOIT – 100+ buttons/toggles
-    Основан на данных Explorer Scanner (Orion Library, Delta Mobile)
+   🔥 DAYCARE ULTIMATE EXPLOIT – 100+ buttons/toggles
+   Исправленная загрузка Orion Library, полный набор фич
 ]]
 
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
+-- ==================== ЗАГРУЗКА ORION LIBRARY ====================
+local OrionLib
+
+local mainURL = "https://raw.githubusercontent.com/Qanuir/orion-ui/main/source.lua"
+local fallbackURL = "https://raw.githubusercontent.com/xHeptc/OrionLibrary/main/source.lua"
+
+local function loadOrion(url)
+    local success, result = pcall(function()
+        return loadstring(game:HttpGet(url))()
+    end)
+    if success and result then
+        return result
+    else
+        warn("Ошибка загрузки Orion из " .. url .. ": " .. tostring(result))
+        return nil
+    end
+end
+
+OrionLib = loadOrion(mainURL)
+if not OrionLib then
+    warn("Пробуем запасную ссылку...")
+    OrionLib = loadOrion(fallbackURL)
+end
+
+if not OrionLib then
+    error("Orion Library не загрузилась. Проверь интернет или VPN для доступа к GitHub.")
+end
+
+-- ==================== ИНИЦИАЛИЗАЦИЯ UI ====================
 local Window = OrionLib:MakeWindow({
     Name = "Daycare Ultimate",
     HidePremium = false,
@@ -12,13 +40,12 @@ local Window = OrionLib:MakeWindow({
     IntroText = "100+ TOGGLES"
 })
 
--- Вкладки
-local TabRemotes = Window:MakeTab({Name = "RemoteEvents", Icon = "rbxassetid://4483345998"})
-local TabViruses = Window:MakeTab({Name = "Viruses", Icon = "rbxassetid://4483345998"})
-local TabItems = Window:MakeTab({Name = "Backpack", Icon = "rbxassetid://4483345998"})
-local TabOther = Window:MakeTab({Name = "Extras", Icon = "rbxassetid://4483345998"})
+local TabRemotes = Window:MakeTab({Name = "🌐 RemoteEvents", Icon = "rbxassetid://4483345998"})
+local TabViruses = Window:MakeTab({Name = "🦠 Viruses", Icon = "rbxassetid://4483345998"})
+local TabItems = Window:MakeTab({Name = "🎒 Backpack", Icon = "rbxassetid://4483345998"})
+local TabOther = Window:MakeTab({Name = "⚙️ Extras", Icon = "rbxassetid://4483345998"})
 
--- Утилиты
+-- ==================== СЛУЖЕБНЫЕ ФУНКЦИИ ====================
 local function Notify(title, msg)
     OrionLib:MakeNotification({
         Name = title, Content = msg,
@@ -42,7 +69,7 @@ local VirusesFolder = RS:FindFirstChild("Viruses") and RS.Viruses:FindFirstChild
 local Players = game:GetService("Players")
 local LP = Players.LocalPlayer
 
--- ====================== REMOTE EVENTS ======================
+-- ==================== REMOTE EVENTS (12 кнопок) ====================
 TabRemotes:AddButton({Name = "📦 GivePlayer (дать предмет)", Callback = function()
     safeFire(RE.GivePlayer, "SomeItem") Notify("GivePlayer", "Запрос отправлен")
 end})
@@ -80,9 +107,9 @@ TabRemotes:AddButton({Name = "🍾 BottleBreak (разбить все бутыл
     safeFire(RE.BottleBreak) Notify("Bottle", "Все бутылки разбиты")
 end})
 
--- ====================== LOOPS (тоглы) ======================
+-- ==================== ПЕТЛИ-СПАМ (тогглы) ====================
 local loops = {}
-local function addLoop(name, f)
+local function addLoop(name, interval, f)
     loops[name] = false
     TabOther:AddToggle({
         Name = name,
@@ -93,7 +120,7 @@ local function addLoop(name, f)
                 task.spawn(function()
                     while loops[name] do
                         pcall(f)
-                        task.wait(0.5)
+                        task.wait(interval)
                     end
                 end)
             end
@@ -101,13 +128,13 @@ local function addLoop(name, f)
     })
 end
 
-addLoop("⚡ Спам Taze", function() safeFire(RE.Taze) end)
-addLoop("💥 Спам Ragdoll", function() safeFire(RE.Ragdoll, true) end)
-addLoop("🚪 Спам открытия дверей", function() safeFire(RE.DoorTrigger) end)
-addLoop("🔊 Спам звука", function() safeFire(RE.LocalSound, "rbxassetid://9120386436") end)
-addLoop("🎭 Спам анимаций", function() safeFire(RE.AnimationChange, "dance") end)
+addLoop("⚡ Спам Taze (0.5с)", 0.5, function() safeFire(RE.Taze) end)
+addLoop("💥 Спам Ragdoll (0.5с)", 0.5, function() safeFire(RE.Ragdoll, true) end)
+addLoop("🚪 Спам открытия дверей (1с)", 1, function() safeFire(RE.DoorTrigger) end)
+addLoop("🔊 Спам звука (1с)", 1, function() safeFire(RE.LocalSound, "rbxassetid://9120386436") end)
+addLoop("🎭 Спам анимаций (1с)", 1, function() safeFire(RE.AnimationChange, "dance") end)
 
--- ====================== ВИРУСЫ (53 тоггла) ======================
+-- ==================== ВИРУСЫ (53 тоггла) ====================
 local virusNames = {
     "Fidgeting","GiveFace","GiveSmoke","GiveSparkles","Unicorn","JumpChange",
     "Jumping","ReflectanceChange","RemoveLeftArm","Burn","RemoveRightArm",
@@ -126,12 +153,10 @@ local function triggerVirus(virusName)
     if not VirusesFolder then return end
     local virus = VirusesFolder:FindFirstChild(virusName)
     if virus then
-        -- Ищем RemoteEvent или communication
         local rem = virus:FindFirstChild("RemoteEvent") or virus:FindFirstChild("communication")
         if rem then
             safeFire(rem, LP)
         else
-            -- Может быть BindableEvent
             rem = virus:FindFirstChildWhichIsA("BindableEvent")
             if rem then
                 rem:Fire()
@@ -146,14 +171,12 @@ for _, name in ipairs(virusNames) do
         Default = false,
         Callback = function(v)
             if v then
-                -- Применяем сразу
                 triggerVirus(name)
             end
         end
     })
 end
 
--- Доп. кнопка: заразить всеми вирусами сразу
 TabViruses:AddButton({
     Name = "🦠💀 ЗАРАЗИТЬ ВСЕМИ СРАЗУ",
     Callback = function()
@@ -164,7 +187,7 @@ TabViruses:AddButton({
     end
 })
 
--- ====================== ПРЕДМЕТЫ В РЮКЗАКЕ ======================
+-- ==================== ПРЕДМЕТЫ В РЮКЗАКЕ (17+ кнопок) ====================
 local function getItem(itemName)
     local bp = LP:FindFirstChild("Backpack")
     if bp then
@@ -180,7 +203,6 @@ local function useItem(itemName)
         Notify("Нет предмета", itemName)
         return
     end
-    -- Ищем любой RemoteEvent
     for _, child in ipairs(item:GetChildren()) do
         if child:IsA("RemoteEvent") or child:IsA("BindableEvent") then
             safeFire(child)
@@ -188,14 +210,12 @@ local function useItem(itemName)
             return
         end
     end
-    -- Пробуем локальный скрипт (если есть)
     local ls = item:FindFirstChildWhichIsA("LocalScript")
     if ls then
         pcall(function() require(ls) end)
         Notify(itemName, "LocalScript запущен")
         return
     end
-    -- Пробуем скрипт ServerBottle
     local serv = item:FindFirstChild("ServerBottle") or item:FindFirstChild("Script")
     if serv and serv:IsA("Script") then
         pcall(function() require(serv) end)
@@ -208,7 +228,7 @@ end
 local backpackItems = {
     "Bottle", "Milk", "Chalk", "Snatch", "Teddi", "Cheezburger", "Cake",
     "Waffle", "Bloxiade", "Bowl", "Popsicle", "StarbloxLatte", "BloxyCola",
-    "Bouncy", "Jelly", "Teddy", "Sword", "Key" -- добавил что вспомнил
+    "Bouncy", "Jelly", "Teddy", "Sword", "Key"
 }
 for _, it in ipairs(backpackItems) do
     TabItems:AddButton({
@@ -217,7 +237,7 @@ for _, it in ipairs(backpackItems) do
     })
 end
 
--- ====================== ЭКСТРА ======================
+-- ==================== ЭКСТРА ====================
 TabOther:AddButton({
     Name = "🔥 БЭКДОР __FUNCTION",
     Callback = function()
@@ -271,5 +291,5 @@ TabOther:AddButton({
     end
 })
 
--- Завершаем интерфейс
+-- ==================== ЗАВЕРШЕНИЕ ====================
 OrionLib:Init()
