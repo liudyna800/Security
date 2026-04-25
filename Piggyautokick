@@ -1,243 +1,275 @@
 --[[
-    ╔══════════════════════════════════════════════════════════════╗
-    ║   EXPLORER SCANNER – Delta Mobile Edition                 ║
-    ║   Сканирует ВСЁ + фильтр ESP/Anti-XXX + сохранение      ║
-    ║   в уникальный файл через writefile()                   ║
-    ╚══════════════════════════════════════════════════════════════╝
+    🔥 DAYCARE MEGA EXPLOIT – 100+ buttons/toggles
+    Основан на данных Explorer Scanner (Orion Library, Delta Mobile)
 ]]
 
--- 1. Загружаем Orion Library (самая стабильная для Delta)
-local OrionLib = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"
-))()
-
--- 2. Создаём окно
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 local Window = OrionLib:MakeWindow({
-    Name = "🔍 Delta Explorer Scanner",
+    Name = "Daycare Ultimate",
     HidePremium = false,
-    SaveConfig = false,   -- на Delta сохранение конфигов Orion не всегда работает, будем использовать свой файл
+    SaveConfig = false,
     IntroEnabled = true,
-    IntroText = "DELTA MOBILE SCANNER"
+    IntroText = "100+ TOGGLES"
 })
 
--- 3. Вкладка
-local Tab = Window:MakeTab({
-    Name = "Сканер",
-    Icon = "rbxassetid://4483345998",
-    PremiumOnly = false
+-- Вкладки
+local TabRemotes = Window:MakeTab({Name = "RemoteEvents", Icon = "rbxassetid://4483345998"})
+local TabViruses = Window:MakeTab({Name = "Viruses", Icon = "rbxassetid://4483345998"})
+local TabItems = Window:MakeTab({Name = "Backpack", Icon = "rbxassetid://4483345998"})
+local TabOther = Window:MakeTab({Name = "Extras", Icon = "rbxassetid://4483345998"})
+
+-- Утилиты
+local function Notify(title, msg)
+    OrionLib:MakeNotification({
+        Name = title, Content = msg,
+        Image = "rbxassetid://4483345998", Time = 2
+    })
+end
+
+local function safeFire(remote, ...)
+    pcall(function() remote:FireServer(...) end)
+end
+
+local function safeInvoke(remote, ...)
+    local res = nil
+    pcall(function() res = remote:InvokeServer(...) end)
+    return res
+end
+
+local RS = game:GetService("ReplicatedStorage")
+local RE = RS:FindFirstChild("RemoteEvents") or RS:WaitForChild("RemoteEvents")
+local VirusesFolder = RS:FindFirstChild("Viruses") and RS.Viruses:FindFirstChild("VirusFolder")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+
+-- ====================== REMOTE EVENTS ======================
+TabRemotes:AddButton({Name = "📦 GivePlayer (дать предмет)", Callback = function()
+    safeFire(RE.GivePlayer, "SomeItem") Notify("GivePlayer", "Запрос отправлен")
+end})
+TabRemotes:AddButton({Name = "⚡ Taze (шокер)", Callback = function()
+    safeFire(RE.Taze) Notify("Taze", "Применён")
+end})
+TabRemotes:AddButton({Name = "💥 Ragdoll (тряпичная кукла)", Callback = function()
+    safeFire(RE.Ragdoll, true) Notify("Ragdoll", "ON")
+end})
+TabRemotes:AddButton({Name = "🎭 AnimationChange (смена анимки)", Callback = function()
+    safeFire(RE.AnimationChange, "dance") Notify("Anim", "Танец")
+end})
+TabRemotes:AddButton({Name = "🚪 Открыть все двери", Callback = function()
+    safeFire(RE.DoorTrigger) Notify("Двери", "Открыты")
+end})
+TabRemotes:AddButton({Name = "👊 Fight (драка)", Callback = function()
+    safeFire(RE.Fight) Notify("Fight", "Начато")
+end})
+TabRemotes:AddButton({Name = "🔊 LocalSound (звук на всех)", Callback = function()
+    safeFire(RE.LocalSound, "rbxassetid://9120386436") Notify("Звук", "Громко!")
+end})
+TabRemotes:AddButton({Name = "🔔 SoundTrigger", Callback = function()
+    safeFire(RE.SoundTrigger) Notify("SoundTrigger", "Отправлен")
+end})
+TabRemotes:AddButton({Name = "🕒 StartScientistTimer (сброс таймера)", Callback = function()
+    safeFire(RE.StartScientistTimer) Notify("Scientist", "Таймер запущен")
+end})
+TabRemotes:AddButton({Name = "🧪 TriggerScaryCapsule", Callback = function()
+    safeFire(RE.TriggerScaryCapsule) Notify("Капсула", "Активирована")
+end})
+TabRemotes:AddButton({Name = "🌞 DayChange (смена дня)", Callback = function()
+    safeFire(RE.DayChange) Notify("День", "Сменён")
+end})
+TabRemotes:AddButton({Name = "🍾 BottleBreak (разбить все бутылки)", Callback = function()
+    safeFire(RE.BottleBreak) Notify("Bottle", "Все бутылки разбиты")
+end})
+
+-- ====================== LOOPS (тоглы) ======================
+local loops = {}
+local function addLoop(name, f)
+    loops[name] = false
+    TabOther:AddToggle({
+        Name = name,
+        Default = false,
+        Callback = function(v)
+            loops[name] = v
+            if v then
+                task.spawn(function()
+                    while loops[name] do
+                        pcall(f)
+                        task.wait(0.5)
+                    end
+                end)
+            end
+        end
+    })
+end
+
+addLoop("⚡ Спам Taze", function() safeFire(RE.Taze) end)
+addLoop("💥 Спам Ragdoll", function() safeFire(RE.Ragdoll, true) end)
+addLoop("🚪 Спам открытия дверей", function() safeFire(RE.DoorTrigger) end)
+addLoop("🔊 Спам звука", function() safeFire(RE.LocalSound, "rbxassetid://9120386436") end)
+addLoop("🎭 Спам анимаций", function() safeFire(RE.AnimationChange, "dance") end)
+
+-- ====================== ВИРУСЫ (53 тоггла) ======================
+local virusNames = {
+    "Fidgeting","GiveFace","GiveSmoke","GiveSparkles","Unicorn","JumpChange",
+    "Jumping","ReflectanceChange","RemoveLeftArm","Burn","RemoveRightArm",
+    "ScreamGiver","Visions","Speed Change","TransparencyChange","Vomit","Skai",
+    "ColorChange","Body Change","Explode","Warts","Fairy","Swim","Electricity",
+    "Balloon","ScaryHats","Scary Animals","Spin","ColorVision","Paint","Neon",
+    "Backwards Crawl","HeadShake","RemoveRightLeg","RemoveLeftLeg","Ghost",
+    "Gravity","Flower","NoodleArms","Sneeze","Aggression","Teleportation",
+    "Edible","Firework","Teddy Bear","Camoflauge","Balding","Flatten",
+    "Hallucinations","Boba","Shadows","Snake","Puddle","Talkative","Impostor",
+    "Sitting","Bouncy","Fragile","Beard","Energetic","Gibberish","Pulse",
+    "Detachment","Spider","Worm"
+}
+
+local function triggerVirus(virusName)
+    if not VirusesFolder then return end
+    local virus = VirusesFolder:FindFirstChild(virusName)
+    if virus then
+        -- Ищем RemoteEvent или communication
+        local rem = virus:FindFirstChild("RemoteEvent") or virus:FindFirstChild("communication")
+        if rem then
+            safeFire(rem, LP)
+        else
+            -- Может быть BindableEvent
+            rem = virus:FindFirstChildWhichIsA("BindableEvent")
+            if rem then
+                rem:Fire()
+            end
+        end
+    end
+end
+
+for _, name in ipairs(virusNames) do
+    TabViruses:AddToggle({
+        Name = "🦠 "..name,
+        Default = false,
+        Callback = function(v)
+            if v then
+                -- Применяем сразу
+                triggerVirus(name)
+            end
+        end
+    })
+end
+
+-- Доп. кнопка: заразить всеми вирусами сразу
+TabViruses:AddButton({
+    Name = "🦠💀 ЗАРАЗИТЬ ВСЕМИ СРАЗУ",
+    Callback = function()
+        for _, name in ipairs(virusNames) do
+            triggerVirus(name)
+        end
+        Notify("ВСЕ вирусы", "Применены!")
+    end
 })
 
--- 4. Какие сервисы сканируем
-local Targets = {
-    "Workspace",
-    "Lighting",
-    "ReplicatedStorage",
-    "ServerStorage",
-    "Players"
-}
-
-local SelectedTarget = "Workspace"
-
--- ============================================
--- 5. КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФИЛЬТРА ESP / АНТИ-XXX
---    Дополни сам, если нужно
--- ============================================
-local KEYWORDS = {
-    "esp", "aimbot", "silent", "trigger", "wallhack",
-    "remote", "remotefunction", "remoteevent", "bindable",
-    "antichat", "anti", "cheat", "backdoor", "virus",
-    "script", "localscript", "modulescript",
-    "exploit", "inject", "hook", "bypass",
-    "esp", "box", "skeleton", "health", "distance",
-    "fly", "noclip", "speed", "jump", "inf",
-    "teleport", "farm", "autofarm", "collect"
-}
-
--- 6. Функция: проверяет, содержит ли строка любое из ключевых слов
-local function matchesFilter(str)
-    str = str:lower()
-    for _, kw in ipairs(KEYWORDS) do
-        if str:find(kw:lower(), 1, true) then
-            return true
+-- ====================== ПРЕДМЕТЫ В РЮКЗАКЕ ======================
+local function getItem(itemName)
+    local bp = LP:FindFirstChild("Backpack")
+    if bp then
+        for _, v in ipairs(bp:GetChildren()) do
+            if v.Name == itemName then return v end
         end
     end
-    return false
 end
 
--- 7. Рекурсивный сбор ВСЕХ объектов с фильтрацией
-local function ScanAll(targetName)
-    local service = game:GetService(targetName)
-    local results = {}
-
-    local function recurse(parent, depth)
-        depth = depth or 0
-        for _, child in ipairs(parent:GetChildren()) do
-            local name = child.Name
-            local class = child.ClassName
-            local path = child:GetFullName()
-
-            -- Добавляем объект, если имя ИЛИ класс совпадает с фильтром
-            if matchesFilter(name) or matchesFilter(class) then
-                table.insert(results, {
-                    Name = name,
-                    ClassName = class,
-                    Path = path,
-                    Depth = depth
-                })
-            end
-
-            -- Заходим глубже
-            if #child:GetChildren() > 0 then
-                recurse(child, depth + 1)
-            end
-        end
-    end
-
-    recurse(service)
-    return results
-end
-
--- 8. Переменные UI
-local Dropdown
-local SelectedObjectPath = ""
-
--- 9. Обновление выпадающего списка объектов
-local function UpdateDropdown()
-    local objects = ScanAll(SelectedTarget)
-    local items = {}
-
-    for _, obj in ipairs(objects) do
-        local indent = string.rep("    ", obj.Depth)
-        table.insert(items, indent .. obj.Name .. " (" .. obj.ClassName .. ")")
-    end
-
-    if Dropdown then
-        Dropdown:Refresh(items, true)
-    end
-
-    -- Возвращаем количество найденного
-    return #objects
-end
-
--- 10. Сохранение результатов в УНИКАЛЬНЫЙ файл
-local function SaveToFile()
-    local objects = ScanAll(SelectedTarget)
-    if #objects == 0 then
-        OrionLib:MakeNotification({
-            Name = "Пусто",
-            Content = "Нет объектов, соответствующих фильтру.",
-            Image = "rbxassetid://4483345998",
-            Time = 3
-        })
+local function useItem(itemName)
+    local item = getItem(itemName)
+    if not item then
+        Notify("Нет предмета", itemName)
         return
     end
-
-    -- Генерируем имя файла с датой и временем
-    local now = os.date("%Y-%m-%d_%H-%M-%S")
-    local filename = "explorer_scan_" .. now .. ".txt"
-
-    -- Формируем содержимое
-    local lines = {}
-    table.insert(lines, "=== EXPLORER SCAN ===")
-    table.insert(lines, "Дата: " .. os.date("%Y-%m-%d %H:%M:%S"))
-    table.insert(lines, "Цель: " .. SelectedTarget)
-    table.insert(lines, "Найдено объектов: " .. #objects)
-    table.insert(lines, "------------------------")
-    for _, obj in ipairs(objects) do
-        table.insert(lines, obj.Path .. " [" .. obj.ClassName .. "]")
-    end
-    table.insert(lines, "=== КОНЕЦ ===")
-    local content = table.concat(lines, "\n")
-
-    -- Пытаемся записать файл через writefile (работает на Delta)
-    local success, err = pcall(function()
-        writefile(filename, content)
-    end)
-
-    if success then
-        OrionLib:MakeNotification({
-            Name = "✅ Сохранено!",
-            Content = "Файл: " .. filename,
-            Image = "rbxassetid://4483345998",
-            Time = 5
-        })
-    else
-        -- Фолбэк: если writefile нет, пробуем delta:SaveScript (для Delta X)
-        local success2, err2 = pcall(function()
-            delta:SaveScript(filename, content, "scan")
-        end)
-        if success2 then
-            OrionLib:MakeNotification({
-                Name = "✅ Сохранено (Delta API)",
-                Content = "Скрипт сохранён в локальное меню Delta",
-                Image = "rbxassetid://4483345998",
-                Time = 5
-            })
-        else
-            OrionLib:MakeNotification({
-                Name = "❌ Ошибка сохранения",
-                Content = "writefile и delta:SaveScript недоступны. Проверь версию Delta.",
-                Image = "rbxassetid://4483345998",
-                Time = 5
-            })
+    -- Ищем любой RemoteEvent
+    for _, child in ipairs(item:GetChildren()) do
+        if child:IsA("RemoteEvent") or child:IsA("BindableEvent") then
+            safeFire(child)
+            Notify(itemName, "Использован!")
+            return
         end
     end
+    -- Пробуем локальный скрипт (если есть)
+    local ls = item:FindFirstChildWhichIsA("LocalScript")
+    if ls then
+        pcall(function() require(ls) end)
+        Notify(itemName, "LocalScript запущен")
+        return
+    end
+    -- Пробуем скрипт ServerBottle
+    local serv = item:FindFirstChild("ServerBottle") or item:FindFirstChild("Script")
+    if serv and serv:IsA("Script") then
+        pcall(function() require(serv) end)
+        Notify(itemName, "Server скрипт вызван")
+        return
+    end
+    Notify(itemName, "Не удалось использовать")
 end
 
--- ============================================
--- 11. ЭЛЕМЕНТЫ ИНТЕРФЕЙСА
--- ============================================
+local backpackItems = {
+    "Bottle", "Milk", "Chalk", "Snatch", "Teddi", "Cheezburger", "Cake",
+    "Waffle", "Bloxiade", "Bowl", "Popsicle", "StarbloxLatte", "BloxyCola",
+    "Bouncy", "Jelly", "Teddy", "Sword", "Key" -- добавил что вспомнил
+}
+for _, it in ipairs(backpackItems) do
+    TabItems:AddButton({
+        Name = "🎒 "..it,
+        Callback = function() useItem(it) end
+    })
+end
 
--- Кнопка «Сканировать и сохранить» (основное действие)
-Tab:AddButton({
-    Name = "🔎 Сканировать и сохранить в файл",
+-- ====================== ЭКСТРА ======================
+TabOther:AddButton({
+    Name = "🔥 БЭКДОР __FUNCTION",
     Callback = function()
-        local count = UpdateDropdown()
-        SaveToFile()
-    end
-})
-
--- Выбор сервиса
-Tab:AddDropdown({
-    Name = "🎯 Цель",
-    Default = "Workspace",
-    Options = Targets,
-    Callback = function(val)
-        SelectedTarget = val
-        UpdateDropdown()
-    end
-})
-
--- Выпадающий список найденных объектов (для просмотра на экране)
-Dropdown = Tab:AddDropdown({
-    Name = "📦 Найденные объекты",
-    Default = "",
-    Options = {},
-    Callback = function(val)
-        local objects = ScanAll(SelectedTarget)
-        for _, obj in ipairs(objects) do
-            local indent = string.rep("    ", obj.Depth)
-            local displayed = indent .. obj.Name .. " (" .. obj.ClassName .. ")"
-            if displayed == val then
-                SelectedObjectPath = obj.Path
-                break
-            end
+        local f = RS:FindFirstChild("e5fe32a0-64d3-42eb-9122-3a51538151d9")
+        if f and f:FindFirstChild("__FUNCTION") then
+            local result = safeInvoke(f.__FUNCTION, "getadmin")
+            Notify("Бэкдор", "Ответ: "..tostring(result))
+        else
+            Notify("Ошибка", "Функция не найдена")
         end
     end
 })
 
--- Кнопка «Показать в консоли» (для отладки)
-Tab:AddButton({
-    Name = "🖨️ Вывести в консоль (F9)",
+TabOther:AddButton({
+    Name = "📅 Авто DailyReward (1 раз)",
     Callback = function()
-        local objects = ScanAll(SelectedTarget)
-        print("=== НАЙДЕННЫЕ ОБЪЕКТЫ ===")
-        for _, obj in ipairs(objects) do
-            print(obj.Path .. " [" .. obj.ClassName .. "]")
+        local dr = LP.PlayerGui:FindFirstChild("DailyRewards")
+        if dr then
+            local remote = dr:FindFirstChild("communication") or dr:FindFirstChild("RemoteEvent")
+            if remote then safeFire(remote) Notify("Daily", "Награда получена") end
         end
-        print("=== ВСЕГО: " .. #objects .. " ===")
     end
 })
 
--- 12. Завершаем инициализацию
+TabOther:AddButton({
+    Name = "🔬 Взлом Scientist Access",
+    Callback = function()
+        local isg = LP.PlayerGui:FindFirstChild("InstantScientistGui")
+        if isg then
+            local bind = isg:FindFirstChild("ChangeAccess") or isg:FindFirstChild("BindableEvent")
+            if bind then bind:Fire() Notify("Scientist", "Доступ выдан") end
+        end
+    end
+})
+
+TabOther:AddButton({
+    Name = "🎒 Дать все предметы (попытка)",
+    Callback = function()
+        for _, name in ipairs(backpackItems) do
+            safeFire(RE.GivePlayer, name)
+        end
+        Notify("Предметы", "Запросы отправлены")
+    end
+})
+
+TabOther:AddButton({
+    Name = "🛑 ОТКЛЮЧИТЬ ВСЕ ПЕТЛИ",
+    Callback = function()
+        for k in pairs(loops) do loops[k] = false end
+        Notify("Все лупы", "Остановлены")
+    end
+})
+
+-- Завершаем интерфейс
 OrionLib:Init()
