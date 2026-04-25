@@ -1,493 +1,401 @@
 --[[
-   FLEE THE FACILITY: ABSOLUTE DOMINATION v3.0
-   Адаптивный Orion хаб с автоматическим поиском всех ключевых объектов.
-   Разработчик: Индивидуальный заказ.
-   Строк: 800+ (каждая нужна)
---]]
+    MM2 Orion Script by Qanuir (Orion Library Edition)
+    Features: Auto Farm, ESP, Aimbot (Silent Aim), Utilities
+    Load through Orion-compatible executor: Synapse X, Script-Ware, KRNL, etc.
+]]
 
+-- 1. Load OrionLib from official source
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
+
+-- 2. Create Window
 local Window = OrionLib:MakeWindow({
-    Name = "FTF • ABSOLUTE DOMINATION",
+    Name = "MM2 Hub | Orion Edition",
     HidePremium = false,
-    SaveConfig = false,
-    ConfigFolder = "FTF_Domination"
+    SaveConfig = true,
+    ConfigFolder = "MM2_Orion"
 })
 
--- Сервисы
-local Players = game:GetService("Players")
-local LP = Players.LocalPlayer
-local WS = game:GetService("Workspace")
-local RS = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
+-- 3. Tabs
+local MainTab = Window:MakeTab({
+    Name = "Main",
+    Icon = "rbxassetid://4483345998", -- Feather icon: home
+    PremiumOnly = false
+})
 
--- Полезные сокращения
-local function getChar()
-    return LP.Character or LP.CharacterAdded:Wait()
-end
+local ESPTab = Window:MakeTab({
+    Name = "ESP",
+    Icon = "rbxassetid://4483345998", -- Feather icon: eye
+    PremiumOnly = false
+})
 
--- Универсальный сбор всех RemoteEvent/RemoteFunction
-local allRemotes = {}
-for _, obj in ipairs(RS:GetDescendants()) do
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        table.insert(allRemotes, obj)
-    end
-end
+local AimbotTab = Window:MakeTab({
+    Name = "Aimbot",
+    Icon = "rbxassetid://4483345998", -- Feather icon: crosshair
+    PremiumOnly = false
+})
 
--- Динамический поиск всех интерактивных объектов
-local function findAllPromptObjects()
-    local list = {}
-    for _, obj in ipairs(WS:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then
-            table.insert(list, {Name = obj.Parent.Name, Object = obj, Type = "Proximity"})
-        elseif obj:IsA("ClickDetector") then
-            table.insert(list, {Name = obj.Parent.Name, Object = obj, Type = "Click"})
-        end
-    end
-    return list
-end
+local UtilTab = Window:MakeTab({
+    Name = "Utilities",
+    Icon = "rbxassetid://4483345998", -- Feather icon: tool
+    PremiumOnly = false
+})
 
--- Поиск компьютеров (любые объекты с ProximityPrompt, которые привязаны к взлому)
-local function findAllComputers()
-    local computers = {}
-    for _, obj in ipairs(WS:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            local prompt = obj:FindFirstChildOfClass("ProximityPrompt")
-            if prompt and (obj.Name:lower():find("comp") or obj.Name:lower():find("hack") or obj.Name:lower():find("laptop")) then
-                table.insert(computers, obj)
-            end
-        end
-    end
-    return computers
-end
+------------------- MAIN TAB -------------------
+local AutoFarmEnabled = false
+local AutoFarmConnection
 
--- Поиск выходов (двери, которые открываются после взлома)
-local function findAllExits()
-    local exits = {}
-    for _, obj in ipairs(WS:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name:lower():find("exit") or obj.Name:lower():find("door")) then
-            -- Исключаем обычные стены
-            if obj.Transparency < 0.5 and obj.Size.Y > 3 then
-                table.insert(exits, obj)
-            end
-        end
-    end
-    return exits
-end
+-- Auto Farm Logic (collect coins & candies around the map)
+local function startAutoFarm()
+    local player = game.Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:WaitForChild("Humanoid")
+    local rootPart = character:WaitForChild("HumanoidRootPart")
 
--- Поиск капсул с замороженными
-local function findAllPods()
-    local pods = {}
-    for _, obj in ipairs(WS:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name:lower():find("pod") or obj.Name:lower():find("freeze") or obj.Name:lower():find("frozen")) then
-            table.insert(pods, obj)
-        end
-    end
-    return pods
-end
+    local worksp = game:GetService("Workspace")
+    local runservice = game:GetService("RunService")
 
--- Вкладки
-local MainTab = Window:MakeTab({Name = "Главная"})
-local SurvivorTab = Window:MakeTab({Name = "Выживший"})
-local BeastTab = Window:MakeTab({Name = "Зверь"})
-local VisualsTab = Window:MakeTab({Name = "Визуалы"})
-local RemoteTab = Window:MakeTab({Name = "RemoteEvents"})
-local ObjectsTab = Window:MakeTab({Name = "Объекты"})
-local TeleportTab = Window:MakeTab({Name = "Телепорты"})
-local MiscTab = Window:MakeTab({Name = "Разное"})
-
--- ==================== ГЛАВНАЯ ====================
-MainTab:AddLabel("Базовые усиления персонажа")
-
-MainTab:AddToggle({Name = "GodMode (бессмертие)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.MaxHealth = math.huge
-            char.Humanoid.Health = math.huge
-        end
-        task.wait(0.3)
-    end
-end})
-
-MainTab:AddToggle({Name = "NoClip (сквозь стены)", Default = false, Callback = function(v)
-    while v do
-        for _, part in ipairs(getChar():GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
-        end
-        task.wait(0.1)
-    end
-end})
-
-MainTab:AddSlider({Name = "Скорость ходьбы", Min = 16, Max = 300, Default = 16, Color = Color3.fromRGB(0,255,0), Increment = 1, ValueName = "studs", Callback = function(val)
-    getChar().Humanoid.WalkSpeed = val
-end})
-
-MainTab:AddSlider({Name = "Сила прыжка", Min = 50, Max = 500, Default = 50, Color = Color3.fromRGB(255,255,0), Increment = 5, ValueName = "power", Callback = function(val)
-    getChar().Humanoid.JumpPower = val
-end})
-
-MainTab:AddToggle({Name = "Infinite Jump", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-        end
-        task.wait()
-    end
-end})
-
-MainTab:AddToggle({Name = "Fly (полёт)", Default = false, Callback = function(v)
-    local char = getChar(); local bv
-    if v then
-        bv = Instance.new("BodyVelocity"); bv.MaxForce = Vector3.new(1e9,1e9,1e9); bv.Parent = char.HumanoidRootPart
-        while v do
-            local vel = Vector3.zero
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then vel += char.HumanoidRootPart.CFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then vel -= char.HumanoidRootPart.CFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then vel -= char.HumanoidRootPart.CFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then vel += char.HumanoidRootPart.CFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vel += Vector3.yAxis end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then vel -= Vector3.yAxis end
-            bv.Velocity = vel * 100
-            task.wait()
-        end
-        bv:Destroy()
-    elseif bv then bv:Destroy() end
-end})
-
--- ==================== ВЫЖИВШИЙ ====================
-SurvivorTab:AddLabel("Автоматизация выживания")
-
-SurvivorTab:AddToggle({Name = "Auto Hack (взлом компьютеров)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        local computers = findAllComputers()
-        for _, comp in ipairs(computers) do
-            local prompt = comp:FindFirstChildOfClass("ProximityPrompt")
-            if prompt and (comp.Position - char.HumanoidRootPart.Position).Magnitude < 30 then
-                char.HumanoidRootPart.CFrame = comp.CFrame * CFrame.new(0, 0, 2)
-                task.wait(0.3)
-                fireproximityprompt(prompt)
-                task.wait(0.5)
-            end
-        end
-        task.wait(1)
-    end
-end})
-
-SurvivorTab:AddToggle({Name = "Auto Escape (авто выход)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        local exits = findAllExits()
-        for _, exit in ipairs(exits) do
-            if exit.Transparency < 0.5 then -- дверь открылась
-                char.HumanoidRootPart.CFrame = exit.CFrame * CFrame.new(0, 0, -2)
-                task.wait(0.5)
-            end
-        end
-        task.wait(1)
-    end
-end})
-
-SurvivorTab:AddToggle({Name = "Auto Unfreeze (спасение)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        local pods = findAllPods()
-        for _, pod in ipairs(pods) do
-            if (pod.Position - char.HumanoidRootPart.Position).Magnitude < 20 then
-                char.HumanoidRootPart.CFrame = pod.CFrame * CFrame.new(0, 0, 1.5)
-                local prompt = pod:FindFirstChildOfClass("ProximityPrompt")
-                if prompt then fireproximityprompt(prompt) end
-                task.wait(0.3)
-            end
-        end
-        task.wait(0.5)
-    end
-end})
-
-SurvivorTab:AddToggle({Name = "Never Fail Hack (авто-клик)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        for _, gui in ipairs(char:GetDescendants()) do
-            if gui:IsA("ScreenGui") and gui.Enabled then
-                for _, btn in ipairs(gui:GetDescendants()) do
-                    if btn:IsA("TextButton") or btn:IsA("ImageButton") then
-                        pcall(function() fireclickdetector(btn) end)
-                    end
+    -- Simple auto collector: walk to nearest coin
+    if AutoFarmConnection then AutoFarmConnection:Disconnect() end
+    AutoFarmConnection = runservice.RenderStepped:Connect(function()
+        if not AutoFarmEnabled then return end
+        local coins = worksp:GetChildren() -- adjust depending on MM2 coin model names
+        -- MM2 stores coins inside a folder or directly in workspace; we need to find them
+        -- Usually "Coins" or "CandyBag" etc. Let's generic search.
+        local nearest = nil
+        local nearestDist = math.huge
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and (obj.Name == "Coin" or obj.Name == "Candy" or obj.Name == "CoinPickup" or obj.Name == "Coin_Model") then
+                local dist = (obj.Position - rootPart.Position).Magnitude
+                if dist < nearestDist then
+                    nearestDist = dist
+                    nearest = obj
                 end
             end
         end
-        task.wait(0.1)
-    end
-end})
-
-SurvivorTab:AddToggle({Name = "Anti Ragdoll (не падать)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.PlatformStand = false
-            char.Humanoid.Sit = false
-        end
-        task.wait(0.2)
-    end
-end})
-
--- ==================== ЗВЕРЬ ====================
-BeastTab:AddLabel("Усиление зверя")
-
-BeastTab:AddToggle({Name = "Auto Attack (убивать выживших)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        local hammer = char:FindFirstChild("Hammer") or char:FindFirstChild("Beast")
-        if hammer and hammer:IsA("Tool") then
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                    local dist = (char.HumanoidRootPart.Position - p.Character.HumanoidRootPart.Position).Magnitude
-                    if dist < 15 then
-                        char.HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 2)
-                        task.wait(0.1)
-                        hammer:Activate()
-                        task.wait(0.4)
-                    end
-                end
+        if nearest then
+            humanoid:MoveTo(nearest.Position)
+            if nearestDist < 5 then
+                firetouchinterest(rootPart, nearest, 0) -- collect
+                wait(0.1)
             end
         end
-        task.wait(0.5)
-    end
-end})
-
-BeastTab:AddToggle({Name = "Auto Tie (связывать)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        for _, obj in ipairs(WS:GetDescendants()) do
-            if obj.Name:lower():find("down") or obj.Name:lower():find("captured") then
-                if obj:IsA("BasePart") and (obj.Position - char.HumanoidRootPart.Position).Magnitude < 10 then
-                    char.HumanoidRootPart.CFrame = obj.CFrame * CFrame.new(0, 0, 1.5)
-                    local prompt = obj:FindFirstChildOfClass("ProximityPrompt")
-                    if prompt then fireproximityprompt(prompt) end
-                    task.wait(0.3)
-                end
-            end
-        end
-        task.wait(0.5)
-    end
-end})
-
-BeastTab:AddToggle({Name = "No Hammer Cooldown", Default = false, Callback = function(v)
-    while v do
-        local hammer = getChar():FindFirstChild("Hammer")
-        if hammer and hammer:IsA("Tool") then
-            hammer:Activate()
-        end
-        task.wait(0.05)
-    end
-end})
-
-BeastTab:AddToggle({Name = "Hitbox Expander", Default = false, Callback = function(v)
-    while v do
-        local hammer = getChar():FindFirstChild("Hammer")
-        if hammer and hammer:FindFirstChild("Handle") then
-            hammer.Handle.Size = Vector3.new(12, 12, 12)
-            hammer.Handle.Transparency = 0.5
-        end
-        task.wait(1)
-    end
-end})
-
-BeastTab:AddToggle({Name = "Crawl Mode (ускорение)", Default = false, Callback = function(v)
-    while v do
-        local char = getChar()
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.WalkSpeed = 120
-            char.Humanoid.CameraOffset = Vector3.new(0, -2, 0)
-        end
-        task.wait(0.5)
-    end
-end})
-
--- ==================== ВИЗУАЛЫ ====================
-VisualsTab:AddLabel("ESP и чистая видимость")
-
-VisualsTab:AddToggle({Name = "ESP Computers", Default = false, Callback = function(v)
-    local highlights = {}
-    while v do
-        local comps = findAllComputers()
-        for _, comp in ipairs(comps) do
-            if not highlights[comp] then
-                local hl = Instance.new("Highlight")
-                hl.FillColor = Color3.fromRGB(0, 100, 255)
-                hl.Parent = comp
-                highlights[comp] = hl
-            end
-        end
-        task.wait(2)
-    end
-    for _, hl in pairs(highlights) do hl:Destroy() end
-end})
-
-VisualsTab:AddToggle({Name = "ESP Exits", Default = false, Callback = function(v)
-    local highlights = {}
-    while v do
-        local exits = findAllExits()
-        for _, exit in ipairs(exits) do
-            if not highlights[exit] then
-                local hl = Instance.new("Highlight")
-                hl.FillColor = Color3.fromRGB(255, 215, 0)
-                hl.Parent = exit
-                highlights[exit] = hl
-            end
-        end
-        task.wait(2)
-    end
-    for _, hl in pairs(highlights) do hl:Destroy() end
-end})
-
-VisualsTab:AddToggle({Name = "ESP Pods", Default = false, Callback = function(v)
-    local highlights = {}
-    while v do
-        local pods = findAllPods()
-        for _, pod in ipairs(pods) do
-            if not highlights[pod] then
-                local hl = Instance.new("Highlight")
-                hl.FillColor = Color3.fromRGB(100, 200, 255)
-                hl.Parent = pod
-                highlights[pod] = hl
-            end
-        end
-        task.wait(2)
-    end
-    for _, hl in pairs(highlights) do hl:Destroy() end
-end})
-
-VisualsTab:AddToggle({Name = "ESP Players (роль)", Default = false, Callback = function(v)
-    local highlights = {}
-    while v do
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LP and p.Character and not highlights[p.UserId] then
-                local hl = Instance.new("Highlight")
-                hl.FillColor = (p.Character:FindFirstChild("Hammer") or p.Character:FindFirstChild("Beast")) and Color3.fromRGB(255,0,0) or Color3.fromRGB(0,255,0)
-                hl.Parent = p.Character
-                highlights[p.UserId] = hl
-            end
-        end
-        task.wait(2)
-    end
-    for _, hl in pairs(highlights) do hl:Destroy() end
-end})
-
-VisualsTab:AddToggle({Name = "FullBright", Default = false, Callback = function(v)
-    local Light = game:GetService("Lighting")
-    if v then
-        Light.Brightness = 2; Light.GlobalShadows = false; Light.FogEnd = 1e9
-    else
-        Light.Brightness = 1; Light.GlobalShadows = true; Light.FogEnd = 10000
-    end
-end})
-
--- ==================== REMOTE EVENTS (РУЧНОЕ УПРАВЛЕНИЕ) ====================
-RemoteTab:AddLabel("Найдено RemoteEvent/Function: " .. #allRemotes)
-for _, remote in ipairs(allRemotes) do
-    RemoteTab:AddButton({Name = "Fire: " .. remote.Name, Callback = function()
-        if remote:IsA("RemoteEvent") then
-            remote:FireServer()
-        elseif remote:IsA("RemoteFunction") then
-            remote:InvokeServer()
-        end
-        OrionLib:MakeNotification({Name = "Вызвано", Content = remote.Name, Time = 2})
-    end})
+    end)
 end
 
--- ==================== ОБЪЕКТЫ (PROXIMITY / CLICK) ====================
-ObjectsTab:AddLabel("Прямой доступ ко всем объектам")
-local allPromptObjects = findAllPromptObjects()
-for _, item in ipairs(allPromptObjects) do
-    ObjectsTab:AddButton({Name = item.Name .. " (" .. item.Type .. ")", Callback = function()
-        if item.Type == "Proximity" then
-            fireproximityprompt(item.Object)
+local function stopAutoFarm()
+    AutoFarmEnabled = false
+    if AutoFarmConnection then
+        AutoFarmConnection:Disconnect()
+        AutoFarmConnection = nil
+    end
+end
+
+MainTab:AddToggle({
+    Name = "Auto Farm (Coins & Candies)",
+    Default = false,
+    Callback = function(Value)
+        AutoFarmEnabled = Value
+        if Value then
+            startAutoFarm()
         else
-            fireclickdetector(item.Object)
+            stopAutoFarm()
         end
-    end})
+    end
+})
+
+MainTab:AddButton({
+    Name = "Destroy AFK HUD (Anti-AFK)",
+    Callback = function()
+        local gui = game:GetService("CoreGui")
+        if gui:FindFirstChild("RobloxGui") then
+            for _, v in ipairs(gui.RobloxGui:GetDescendants()) do
+                if v.Name == "AFK" or v.Name == "AfkGui" then
+                    v:Destroy()
+                end
+            end
+        end
+    end
+})
+
+------------------- ESP TAB -------------------
+local ESPEnabled = false
+local ESPConnections = {}
+local function clearESP()
+    for _, conn in ipairs(ESPConnections) do
+        conn:Disconnect()
+    end
+    ESPConnections = {}
 end
 
--- ==================== ТЕЛЕПОРТЫ ====================
-TeleportTab:AddLabel("Мгновенные перемещения")
+local function createESP(player)
+    local playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "ESP_"..player.Name
+    screenGui.Parent = playerGui
 
-TeleportTab:AddButton({Name = "К ближайшему компьютеру", Callback = function()
-    local char = getChar()
-    local comps = findAllComputers()
-    if #comps > 0 then
-        table.sort(comps, function(a,b) return (a.Position - char.HumanoidRootPart.Position).Magnitude < (b.Position - char.HumanoidRootPart.Position).Magnitude end)
-        char.HumanoidRootPart.CFrame = comps[1].CFrame * CFrame.new(0, 0, 2)
-    end
-end})
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 200, 0, 50)
+    frame.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    frame.BackgroundTransparency = 0.5
+    frame.BorderSizePixel = 0
+    frame.Visible = false
+    frame.Parent = screenGui
 
-TeleportTab:AddButton({Name = "К выходу", Callback = function()
-    local char = getChar()
-    local exits = findAllExits()
-    for _, exit in ipairs(exits) do
-        if exit.Transparency < 0.5 then
-            char.HumanoidRootPart.CFrame = exit.CFrame * CFrame.new(0, 0, -2)
-            break
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1,0,0,20)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = player.Name
+    nameLabel.TextColor3 = Color3.fromRGB(255,255,255)
+    nameLabel.Font = Enum.Font.SourceSans
+    nameLabel.TextSize = 14
+    nameLabel.Parent = frame
+
+    local distanceLabel = Instance.new("TextLabel")
+    distanceLabel.Size = UDim2.new(1,0,0,20)
+    distanceLabel.Position = UDim2.new(0,0,0,20)
+    distanceLabel.BackgroundTransparency = 1
+    distanceLabel.TextColor3 = Color3.fromRGB(200,200,200)
+    distanceLabel.Font = Enum.Font.SourceSans
+    distanceLabel.TextSize = 13
+    distanceLabel.Parent = frame
+
+    local roleLabel = Instance.new("TextLabel")
+    roleLabel.Size = UDim2.new(1,0,0,20)
+    roleLabel.Position = UDim2.new(0,0,0,30)
+    roleLabel.BackgroundTransparency = 1
+    roleLabel.TextColor3 = Color3.fromRGB(255,0,0)
+    roleLabel.Font = Enum.Font.SourceSans
+    roleLabel.TextSize = 13
+    roleLabel.Parent = frame
+
+    local runservice = game:GetService("RunService")
+    local localPlayer = game.Players.LocalPlayer
+
+    local connection = runservice.RenderStepped:Connect(function()
+        if not ESPEnabled then
+            frame.Visible = false
+            return
+        end
+        if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+            frame.Visible = false
+            return
+        end
+        local rootPart = player.Character.HumanoidRootPart
+        local localRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if localRoot then
+            local distance = (rootPart.Position - localRoot.Position).Magnitude
+            distanceLabel.Text = math.floor(distance) .. " studs"
+        else
+            distanceLabel.Text = "?"
+        end
+
+        -- Determine role (rough)
+        local role = "Unknown"
+        if player.Backpack then
+            -- Sheriff has gun tool named "SheriffPistol" or "Gun"
+            if player.Backpack:FindFirstChild("SheriffPistol") or player.Character:FindFirstChild("SheriffPistol") then
+                role = "Sheriff"
+            elseif player.Backpack:FindFirstChild("Knife") or player.Character:FindFirstChild("Knife") then
+                role = "Murderer"
+            else
+                role = "Innocent"
+            end
+        end
+        roleLabel.Text = role
+        if role == "Murderer" then
+            roleLabel.TextColor3 = Color3.fromRGB(255,0,0)
+        elseif role == "Sheriff" then
+            roleLabel.TextColor3 = Color3.fromRGB(0,180,255)
+        else
+            roleLabel.TextColor3 = Color3.fromRGB(0,255,0)
+        end
+
+        -- Position frame on screen based on world point
+        local worldPos = rootPart.Position
+        local camera = workspace.CurrentCamera
+        local screenPos, onScreen = camera:WorldToScreenPoint(worldPos)
+        if onScreen then
+            frame.Visible = true
+            frame.Position = UDim2.new(0, screenPos.X, 0, screenPos.Y - 40)
+        else
+            frame.Visible = false
+        end
+    end)
+    table.insert(ESPConnections, connection)
+end
+
+local function enableESP()
+    local players = game:GetService("Players")
+    for _, player in ipairs(players:GetPlayers()) do
+        if player ~= players.LocalPlayer then
+            createESP(player)
         end
     end
-end})
+end
 
-TeleportTab:AddButton({Name = "К зверю", Callback = function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Character and (p.Character:FindFirstChild("Hammer") or p.Character:FindFirstChild("Beast")) then
-            getChar().HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 10)
-            break
+local function disableESP()
+    clearESP()
+    for _, gui in ipairs(game.Players.LocalPlayer.PlayerGui:GetChildren()) do
+        if gui.Name:sub(1,4) == "ESP_" then
+            gui:Destroy()
         end
     end
-end})
+end
 
-TeleportTab:AddButton({Name = "К случайному выжившему", Callback = function()
-    local survivors = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LP and p.Character and not (p.Character:FindFirstChild("Hammer") or p.Character:FindFirstChild("Beast")) then
-            table.insert(survivors, p)
+ESPTab:AddToggle({
+    Name = "Enable ESP",
+    Default = false,
+    Callback = function(Value)
+        ESPEnabled = Value
+        if Value then
+            enableESP()
+        else
+            disableESP()
         end
     end
-    if #survivors > 0 then
-        local target = survivors[math.random(1, #survivors)]
-        getChar().HumanoidRootPart.CFrame = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
-    end
-end})
-
--- ==================== РАЗНОЕ ====================
-MiscTab:AddLabel("Полезные утилиты")
-
-MiscTab:AddButton({Name = "Замедлить зверя", Callback = function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Character and (p.Character:FindFirstChild("Hammer") or p.Character:FindFirstChild("Beast")) then
-            p.Character.Humanoid.WalkSpeed = 5
-            OrionLib:MakeNotification({Name = "Готово", Content = "Зверь теперь черепаха", Time = 2})
-            break
-        end
-    end
-end})
-
-MiscTab:AddToggle({Name = "Anti-AFK", Default = false, Callback = function(v)
-    while v do
-        getChar().HumanoidRootPart.CFrame = getChar().HumanoidRootPart.CFrame * CFrame.new(0,0,0)
-        task.wait(60)
-    end
-end})
-
-MiscTab:AddToggle({Name = "Auto Server Hop (каждые 5 мин)", Default = false, Callback = function(v)
-    while v do
-        task.wait(300)
-        game:GetService("TeleportService"):Teleport(game.PlaceId)
-    end
-end})
-
--- ==================== ФИНАЛИЗАЦИЯ ====================
-OrionLib:Init()
-OrionLib:MakeNotification({
-    Name = "FTF Absolute Domination",
-    Content = "Загружено " .. #allRemotes .. " RemoteEvent'ов. Властвуй.",
-    Time = 5
 })
+
+------------------- AIMBOT TAB -------------------
+local SilentAimEnabled = false
+local AimTarget = nil
+local AimConnection
+
+AimbotTab:AddToggle({
+    Name = "Silent Aim (Shoot nearest enemy)",
+    Default = false,
+    Callback = function(Value)
+        SilentAimEnabled = Value
+        if Value then
+            -- Disconnect any previous connection
+            if AimConnection then AimConnection:Disconnect() end
+            AimConnection = game:GetService("RunService").RenderStepped:Connect(function()
+                if not SilentAimEnabled then return end
+                local plr = game.Players.LocalPlayer
+                local char = plr.Character
+                if not char then return end
+                local tool = char:FindFirstChildOfClass("Tool")
+                if not tool then
+                    -- also check backpack
+                    local backpack = plr:FindFirstChild("Backpack")
+                    if backpack then
+                        tool = backpack:FindFirstChildOfClass("Tool")
+                    end
+                end
+                if not tool then return end
+                if not tool:FindFirstChild("Handle") then return end
+                local cam = workspace.CurrentCamera
+                local localPos = char.Head.Position
+
+                local nearestEnemy = nil
+                local nearestDist = math.huge
+                for _, p in ipairs(game.Players:GetPlayers()) do
+                    if p ~= plr and p.Character and p.Character:FindFirstChild("Head") then
+                        local head = p.Character.Head
+                        local dist = (head.Position - localPos).magnitude
+                        if dist < nearestDist then
+                            nearestDist = dist
+                            nearestEnemy = p
+                        end
+                    end
+                end
+                if nearestEnemy and nearestEnemy.Character and nearestEnemy.Character:FindFirstChild("Head") then
+                    tool.Handle.CFrame = CFrame.new(tool.Handle.Position, nearestEnemy.Character.Head.Position)
+                end
+            end)
+        else
+            if AimConnection then
+                AimConnection:Disconnect()
+                AimConnection = nil
+            end
+        end
+    end
+})
+
+AimbotTab:AddSlider({
+    Name = "Silent Aim FOV",
+    Min = 0,
+    Max = 360,
+    Default = 180,
+    Color = Color3.fromRGB(255,0,0),
+    Increment = 1,
+    ValueName = "deg",
+    Callback = function(Value)
+        -- Not implemented; can be used to limit target selection
+        print("FOV set to " .. Value)
+    end
+})
+
+------------------- UTILITIES TAB -------------------
+UtilTab:AddToggle({
+    Name = "Infinite Jump",
+    Default = false,
+    Callback = function(Value)
+        local plr = game.Players.LocalPlayer
+        local char = plr.Character or plr.CharacterAdded:Wait()
+        local humanoid = char:WaitForChild("Humanoid")
+        if Value then
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+            humanoid.JumpPower = 150
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            humanoid.JumpPower = 150
+        else
+            humanoid.JumpPower = 50
+        end
+    end
+})
+
+UtilTab:AddToggle({
+    Name = "Fly (Noclip)",
+    Default = false,
+    Callback = function(Value)
+        local plr = game.Players.LocalPlayer
+        local char = plr.Character or plr.CharacterAdded:Wait()
+        local rootPart = char:WaitForChild("HumanoidRootPart")
+        if Value then
+            -- Simple fly script
+            local bodyVel = Instance.new("BodyVelocity")
+            bodyVel.MaxForce = Vector3.new(1,1,1)*1e6
+            bodyVel.Velocity = Vector3.new(0,10,0)
+            bodyVel.Parent = rootPart
+            local bodyGyro = Instance.new("BodyGyro")
+            bodyGyro.MaxTorque = Vector3.new(1,1,1)*1e6
+            bodyGyro.CFrame = rootPart.CFrame
+            bodyGyro.Parent = rootPart
+            local flyLoop
+            flyLoop = game:GetService("RunService").RenderStepped:Connect(function()
+                if not Value then
+                    bodyVel:Destroy()
+                    bodyGyro:Destroy()
+                    flyLoop:Disconnect()
+                else
+                    local camera = workspace.CurrentCamera
+                    local moveDirection = camera.CFrame.LookVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.W) and 50 or 0)
+                    + camera.CFrame.RightVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.D) and 50 or 0)
+                    + camera.CFrame.LookVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.S) and -50 or 0)
+                    + camera.CFrame.RightVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.A) and -50 or 0)
+                    bodyVel.Velocity = moveDirection
+                end
+            end)
+        else
+            -- Disconnect handled above
+        end
+    end
+})
+
+UtilTab:AddButton({
+    Name = "Remove Walksound (Silent Step)",
+    Callback = function()
+        local char = game.Players.LocalPlayer.Character
+        if char then
+            for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("Sound") then
+                    v:Destroy()
+                end
+            end
+        end
+    end
+})
+
+-- 4. Finalize Orion GUI
+OrionLib:Init()
+-- OrionLib:Init() must be called at the very end.
