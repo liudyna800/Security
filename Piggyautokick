@@ -1,16 +1,16 @@
 --[[
     🔍 СУПЕРМЕГА-СКАННЕР ДЛЯ DELTA EXECUTOR
-    Использует библиотеку Orion UI
-    Сохраняет каждый скан в отдельный файл с уникальным именем
+    Библиотека: Orion UI (рабочая ссылка)
+    Сохраняет каждый скан в отдельный файл
 ]]--
 
--- Загрузка Orion (проверенная ссылка)
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Orion/main/source"))()
-local Window = OrionLib:MakeWindow({Name = "Explorer Scanner V3", HidePremium = false, SaveConfig = false, ConfigFolder = "ScannerConfig"})
+-- РАБОЧАЯ БИБЛИОТЕКА
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
+local Window = OrionLib:MakeWindow({Name = "Explorer Ultimate", HidePremium = false, SaveConfig = false, ConfigFolder = "ScannerCfg"})
 
--- Переменные
+-- Счётчики и папка
 local scanCounter = 0
-local defaultFolder = "Scans" -- папка для сохранения
+local defaultFolder = "Scans"
 
 -- ==================== ВКЛАДКИ ====================
 local MainTab = Window:MakeTab({Name = "Сканер", Icon = "rbxassetid://4483345998", PremiumOnly = false})
@@ -19,9 +19,9 @@ local OutputTab = Window:MakeTab({Name = "Вывод", Icon = "rbxassetid://4483
 
 -- ==================== НАСТРОЙКИ ====================
 local scanTarget = "Workspace"
-local maxDepth = 3 -- глубина рекурсии
+local maxDepth = 3
 local includeProperties = true
-local fileFormat = "txt" -- txt/json
+local fileFormat = "txt"
 
 SettingsTab:AddDropdown({
     Name = "Цель сканирования",
@@ -42,7 +42,7 @@ SettingsTab:AddSlider({
 })
 
 SettingsTab:AddToggle({
-    Name = "Добавлять свойства объектов",
+    Name = "Добавлять свойства",
     Default = true,
     Callback = function(val) includeProperties = val end
 })
@@ -62,160 +62,119 @@ SettingsTab:AddTextbox({
 })
 
 -- ==================== ЛОГ ВЫВОДА ====================
-local OutputLog = OutputTab:AddParagraph("Лог", "Ожидание сканирования...")
+local OutputLog = OutputTab:AddParagraph("Лог", "Готов к работе...")
 
 local function addLog(text)
     local current = OutputLog:GetText()
     OutputLog:SetText(current .. "\n" .. text)
 end
 
--- ==================== СКАНЕР ====================
--- Функция рекурсивного обхода
+-- ==================== СКАНИРОВАНИЕ ====================
 local function scanInstance(instance, depth, currentDepth)
     if currentDepth > depth then return "" end
     local entry = ""
     local indent = string.rep("  ", currentDepth)
     
-    -- Название и класс
     entry = entry .. indent .. "[" .. instance.ClassName .. "] " .. instance.Name
     
-    -- Свойства, если включены и объект не слишком тяжёлый
     if includeProperties then
         local props = {}
-        local success, result = pcall(function()
+        pcall(function()
             if instance:IsA("BasePart") then
-                table.insert(props, "Position = " .. tostring(instance.Position))
-                table.insert(props, "Size = " .. tostring(instance.Size))
-                table.insert(props, "Anchored = " .. tostring(instance.Anchored))
+                table.insert(props, "Pos=" .. tostring(instance.Position))
+                table.insert(props, "Size=" .. tostring(instance.Size))
             elseif instance:IsA("Model") then
-                table.insert(props, "PrimaryPart = " .. tostring(instance.PrimaryPart))
+                table.insert(props, "PrimPart=" .. tostring(instance.PrimaryPart))
             elseif instance:IsA("Humanoid") then
-                table.insert(props, "Health = " .. tostring(instance.Health))
-            end
-            -- общие свойства
-            if #props > 0 then
-                entry = entry .. " (" .. table.concat(props, ", ") .. ")"
+                table.insert(props, "Health=" .. tostring(instance.Health))
             end
         end)
-        if not success then
-            entry = entry .. " [Error reading properties]"
+        if #props > 0 then
+            entry = entry .. " (" .. table.concat(props, ", ") .. ")"
         end
     end
-    
     entry = entry .. "\n"
     
-    -- Обходим потомков
-    local children = instance:GetChildren()
-    for _, child in ipairs(children) do
+    for _, child in ipairs(instance:GetChildren()) do
         entry = entry .. scanInstance(child, depth, currentDepth + 1)
     end
-    
     return entry
 end
 
--- Функция сбора всех данных
-local function performScan(targetName, depth)
-    local root = game:FindFirstChild(targetName)
-    if not root then
-        return nil, "Цель не найдена: " .. targetName
-    end
-    
-    local result = "=== СКАНИРОВАНИЕ: " .. targetName .. " ===\n"
-    result = result .. "Дата: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n"
-    result = result .. "Глубина: " .. depth .. "\n\n"
-    result = result .. scanInstance(root, depth, 0)
-    return result
-end
-
--- Преобразование в JSON (простой способ, без библиотеки)
 local function toJsonTable(instance, depth, currentDepth)
     if currentDepth > depth then return nil end
     local obj = {Name = instance.Name, Class = instance.ClassName}
     if includeProperties then
-        if instance:IsA("BasePart") then
-            obj.Position = tostring(instance.Position)
-            obj.Size = tostring(instance.Size)
-        end
+        pcall(function()
+            if instance:IsA("BasePart") then
+                obj.Position = tostring(instance.Position)
+                obj.Size = tostring(instance.Size)
+            end
+        end)
     end
     obj.Children = {}
     for _, child in ipairs(instance:GetChildren()) do
         local childData = toJsonTable(child, depth, currentDepth + 1)
-        if childData then
-            table.insert(obj.Children, childData)
-        end
+        if childData then table.insert(obj.Children, childData) end
     end
     return obj
 end
 
--- Основная кнопка сканирования
+-- ==================== КНОПКИ ====================
 MainTab:AddButton({
     Name = "Сканировать сейчас!",
     Callback = function()
         local target = scanTarget
         local depth = maxDepth
         
-        addLog("▶ Запуск сканирования цели: " .. target .. " с глубиной " .. depth)
+        addLog("▶ Сканирую: " .. target .. " (глубина " .. depth .. ")")
         scanCounter = scanCounter + 1
         
-        -- Генерация имени файла
         local timestamp = os.date("%Y-%m-%d_%H-%M-%S")
         local extension = (fileFormat == "json") and ".json" or ".txt"
-        local fileName = "Scan_" .. target .. "_" .. timestamp .. "_" .. scanCounter .. extension
+        local fileName = "Scan_" .. target .. "_" .. timestamp .. "_num" .. scanCounter .. extension
         local filePath = defaultFolder .. "/" .. fileName
         
-        -- Запуск в корутине, чтобы не вис интерфейс
         task.spawn(function()
-            local success, data_or_err
-            
-            if fileFormat == "json" then
-                local root = game:FindFirstChild(target)
-                if root then
-                    local jsonTable = toJsonTable(root, depth, 0)
-                    if jsonTable then
-                        local jsonStr = game:GetService("HttpService"):JSONEncode(jsonTable)
-                        data_or_err = jsonStr
-                        success = true
+            local ok, data = pcall(function()
+                if fileFormat == "json" then
+                    local root = game:FindFirstChild(target)
+                    if root then
+                        return game:GetService("HttpService"):JSONEncode(toJsonTable(root, depth, 0))
                     else
-                        success = false
-                        data_or_err = "Ошибка при преобразовании в JSON"
+                        error("Цель не найдена")
                     end
                 else
-                    success = false
-                    data_or_err = "Цель не найдена"
+                    local root = game:FindFirstChild(target)
+                    if not root then error("Цель не найдена") end
+                    local header = "=== СКАН: " .. target .. " | " .. os.date("%Y-%m-%d %H:%M:%S") .. " | Глубина: " .. depth .. " ===\n\n"
+                    return header .. scanInstance(root, depth, 0)
                 end
-            else
-                success, data_or_err = pcall(performScan, target, depth)
-                if not success then
-                    data_or_err = "Ошибка сканирования: " .. tostring(data_or_err)
-                end
-            end
+            end)
             
-            if success then
-                -- Сохранение
-                local writeSuccess = pcall(function()
-                    writefile(filePath, data_or_err)
+            if ok then
+                local writeOk, writeErr = pcall(function()
+                    writefile(filePath, data)
                 end)
-                if writeSuccess then
-                    addLog("✅ Файл сохранён: " .. filePath)
+                if writeOk then
+                    addLog("✅ Сохранено: " .. filePath)
                 else
-                    addLog("❌ Не удалось записать файл (возможно нет прав)")
+                    addLog("❌ Ошибка записи: " .. tostring(writeErr))
                 end
             else
-                addLog("❌ Скан провален: " .. data_or_err)
+                addLog("❌ Ошибка: " .. tostring(data))
             end
         end)
     end
 })
 
--- Кнопка просмотра последнего скана (читает файл, но проще показать путь)
 MainTab:AddButton({
-    Name = "Открыть папку сканов",
+    Name = "Открыть папку (путь)",
     Callback = function()
-        -- В Delta нет прямой команды открыть папку, просто выведем путь
-        addLog("📁 Все сканы в папке: " .. defaultFolder .. " (используйте файловый менеджер)")
+        addLog("📁 Все сканы в папке: " .. defaultFolder)
     end
 })
 
 -- Инициализация
 OrionLib:Init()
-addLog("Сканер готов. Выберите настройки и нажмите 'Сканировать сейчас!'")
+addLog("Сканер готов. Жми 'Сканировать сейчас!'")
