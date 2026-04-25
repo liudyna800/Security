@@ -1,180 +1,205 @@
 --[[
-    🔍 СУПЕРМЕГА-СКАННЕР ДЛЯ DELTA EXECUTOR
-    Библиотека: Orion UI (рабочая ссылка)
-    Сохраняет каждый скан в отдельный файл
+   УЛЬТИМАТИВНЫЙ СКАННЕР ДЛЯ DELTA (БЕЗ БИБЛИОТЕК)
+   - Свой GUI (работает всегда)
+   - Уникальные файлы с датой/временем
+   - Сохраняет в workspace Delta
 ]]--
 
--- РАБОЧАЯ БИБЛИОТЕКА
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
-local Window = OrionLib:MakeWindow({Name = "Explorer Ultimate", HidePremium = false, SaveConfig = false, ConfigFolder = "ScannerCfg"})
+local player = game.Players.LocalPlayer
+local runService = game["Run Service"]
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+gui.Name = "ScannerUltimate"
+gui.ResetOnSpawn = false
 
--- Счётчики и папка
-local scanCounter = 0
-local defaultFolder = "Scans"
-
--- ==================== ВКЛАДКИ ====================
-local MainTab = Window:MakeTab({Name = "Сканер", Icon = "rbxassetid://4483345998", PremiumOnly = false})
-local SettingsTab = Window:MakeTab({Name = "Настройки", Icon = "rbxassetid://4483345998", PremiumOnly = false})
-local OutputTab = Window:MakeTab({Name = "Вывод", Icon = "rbxassetid://4483345998", PremiumOnly = false})
-
--- ==================== НАСТРОЙКИ ====================
-local scanTarget = "Workspace"
-local maxDepth = 3
-local includeProperties = true
-local fileFormat = "txt"
-
-SettingsTab:AddDropdown({
-    Name = "Цель сканирования",
-    Default = "Workspace",
-    Options = {"Workspace", "Players", "Lighting", "ReplicatedStorage", "ServerStorage", "StarterGui"},
-    Callback = function(val) scanTarget = val end
-})
-
-SettingsTab:AddSlider({
-    Name = "Макс. глубина",
-    Min = 1,
-    Max = 10,
-    Default = 3,
-    Color = Color3.fromRGB(0, 170, 255),
-    Increment = 1,
-    ValueName = "уровней",
-    Callback = function(val) maxDepth = val end
-})
-
-SettingsTab:AddToggle({
-    Name = "Добавлять свойства",
-    Default = true,
-    Callback = function(val) includeProperties = val end
-})
-
-SettingsTab:AddDropdown({
-    Name = "Формат файла",
-    Default = "txt",
-    Options = {"txt", "json"},
-    Callback = function(val) fileFormat = val end
-})
-
-SettingsTab:AddTextbox({
-    Name = "Папка сохранения",
-    Default = defaultFolder,
-    TextDisappear = false,
-    Callback = function(val) defaultFolder = val end
-})
-
--- ==================== ЛОГ ВЫВОДА ====================
-local OutputLog = OutputTab:AddParagraph("Лог", "Готов к работе...")
-
-local function addLog(text)
-    local current = OutputLog:GetText()
-    OutputLog:SetText(current .. "\n" .. text)
+-- Для удобства
+local function makeLabel(parent, text, position, size)
+    local l = Instance.new("TextLabel", parent)
+    l.Text = text
+    l.Position = position
+    l.Size = size
+    l.Font = Enum.Font.SourceSans
+    l.TextSize = 14
+    l.TextColor3 = Color3.new(1,1,1)
+    l.BackgroundTransparency = 1
+    return l
 end
 
--- ==================== СКАНИРОВАНИЕ ====================
-local function scanInstance(instance, depth, currentDepth)
-    if currentDepth > depth then return "" end
-    local entry = ""
-    local indent = string.rep("  ", currentDepth)
-    
-    entry = entry .. indent .. "[" .. instance.ClassName .. "] " .. instance.Name
-    
-    if includeProperties then
-        local props = {}
+local function makeButton(parent, text, position, size, callback)
+    local b = Instance.new("TextButton", parent)
+    b.Text = text
+    b.Position = position
+    b.Size = size
+    b.Font = Enum.Font.SourceSans
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1,1,1)
+    b.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.MouseButton1Click:Connect(callback)
+    b.TouchTap:Connect(callback) -- для телефона
+    return b
+end
+
+local function makeTextBox(parent, placeholder, position, size)
+    local t = Instance.new("TextBox", parent)
+    t.PlaceholderText = placeholder
+    t.Text = ""
+    t.Position = position
+    t.Size = size
+    t.Font = Enum.Font.SourceSans
+    t.TextSize = 14
+    t.TextColor3 = Color3.new(0,0,0)
+    t.BackgroundColor3 = Color3.new(1,1,1)
+    t.BorderSizePixel = 1
+    return t
+end
+
+-- Основные элементы интерфейса
+local mainFrame = Instance.new("Frame", gui)
+mainFrame.Size = UDim2.new(0, 300, 0, 400)
+mainFrame.Position = UDim2.new(0.5, -150, 0.5, -200)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+
+local targetLabel = makeLabel(mainFrame, "Цель:", UDim2.new(0, 10, 0, 10), UDim2.new(0, 80, 0, 20))
+local targetBox = makeTextBox(mainFrame, "Workspace", UDim2.new(0, 100, 0, 10), UDim2.new(0, 180, 0, 20))
+targetBox.Text = "Workspace"
+
+local depthLabel = makeLabel(mainFrame, "Глубина:", UDim2.new(0, 10, 0, 40), UDim2.new(0, 80, 0, 20))
+local depthBox = makeTextBox(mainFrame, "3", UDim2.new(0, 100, 0, 40), UDim2.new(0, 60, 0, 20))
+depthBox.Text = "3"
+
+local propsEnabled = true
+local propsButton = makeButton(mainFrame, "Свойства: ВКЛ", UDim2.new(0, 170, 0, 40), UDim2.new(0, 110, 0, 20), function()
+    propsEnabled = not propsEnabled
+    propsButton.Text = propsEnabled and "Свойства: ВКЛ" or "Свойства: ВЫКЛ"
+end)
+
+local formatEnabled = true  -- true = txt, false = json
+local formatButton = makeButton(mainFrame, "Формат: TXT", UDim2.new(0, 10, 0, 70), UDim2.new(0, 110, 0, 20), function()
+    formatEnabled = not formatEnabled
+    formatButton.Text = formatEnabled and "Формат: TXT" or "Формат: JSON"
+end)
+
+local scanButton = makeButton(mainFrame, "СКАНИРОВАТЬ", UDim2.new(0, 10, 0, 100), UDim2.new(0, 280, 0, 30), nil)
+local statusLabel = makeLabel(mainFrame, "Готов", UDim2.new(0, 10, 0, 140), UDim2.new(0, 280, 0, 20))
+statusLabel.TextWrapped = true
+
+local filesButton = makeButton(mainFrame, "Показать сохр. файлы", UDim2.new(0, 10, 0, 170), UDim2.new(0, 280, 0, 25), function()
+    local filesList = "Файлы в workspace:\n"
+    local ok, list = pcall(function() return listfiles("*.txt") end)  -- текстовые
+    if ok and list then
+        for _,f in ipairs(list) do
+            filesList = filesList .. f .. "\n"
+        end
+        local ok2, list2 = pcall(function() return listfiles("*.json") end)
+        if ok2 and list2 then
+            for _,f in ipairs(list2) do
+                filesList = filesList .. f .. "\n"
+            end
+        end
+    else
+        filesList = filesList .. "Не удалось прочитать (listfiles недоступен)"
+    end
+    statusLabel.Text = filesList
+end)
+
+-- ================== ЛОГИКА СКАНИРОВАНИЯ ==================
+local scanCount = 0
+
+local function scanToText(inst, depth, curDepth)
+    if curDepth > depth then return "" end
+    local s = string.rep("  ", curDepth) .. "[" .. inst.ClassName .. "] " .. inst.Name
+    if propsEnabled then
+        local extra = {}
         pcall(function()
-            if instance:IsA("BasePart") then
-                table.insert(props, "Pos=" .. tostring(instance.Position))
-                table.insert(props, "Size=" .. tostring(instance.Size))
-            elseif instance:IsA("Model") then
-                table.insert(props, "PrimPart=" .. tostring(instance.PrimaryPart))
-            elseif instance:IsA("Humanoid") then
-                table.insert(props, "Health=" .. tostring(instance.Health))
+            if inst:IsA("BasePart") then
+                extra[#extra+1] = "Pos=" .. tostring(inst.Position)
+                extra[#extra+1] = "Size=" .. tostring(inst.Size)
+            elseif inst:IsA("Humanoid") then
+                extra[#extra+1] = "HP=" .. tostring(inst.Health)
             end
         end)
-        if #props > 0 then
-            entry = entry .. " (" .. table.concat(props, ", ") .. ")"
+        if #extra > 0 then
+            s = s .. " (" .. table.concat(extra, ", ") .. ")"
         end
     end
-    entry = entry .. "\n"
-    
-    for _, child in ipairs(instance:GetChildren()) do
-        entry = entry .. scanInstance(child, depth, currentDepth + 1)
+    s = s .. "\n"
+    for _, child in ipairs(inst:GetChildren()) do
+        s = s .. scanToText(child, depth, curDepth+1)
     end
-    return entry
+    return s
 end
 
-local function toJsonTable(instance, depth, currentDepth)
-    if currentDepth > depth then return nil end
-    local obj = {Name = instance.Name, Class = instance.ClassName}
-    if includeProperties then
+local function scanToJsonTable(inst, depth, curDepth)
+    if curDepth > depth then return nil end
+    local obj = {Name=inst.Name, Class=inst.ClassName}
+    if propsEnabled then
         pcall(function()
-            if instance:IsA("BasePart") then
-                obj.Position = tostring(instance.Position)
-                obj.Size = tostring(instance.Size)
+            if inst:IsA("BasePart") then
+                obj.Position = tostring(inst.Position)
+                obj.Size = tostring(inst.Size)
             end
         end)
     end
     obj.Children = {}
-    for _, child in ipairs(instance:GetChildren()) do
-        local childData = toJsonTable(child, depth, currentDepth + 1)
+    for _, child in ipairs(inst:GetChildren()) do
+        local childData = scanToJsonTable(child, depth, curDepth+1)
         if childData then table.insert(obj.Children, childData) end
     end
     return obj
 end
 
--- ==================== КНОПКИ ====================
-MainTab:AddButton({
-    Name = "Сканировать сейчас!",
-    Callback = function()
-        local target = scanTarget
-        local depth = maxDepth
-        
-        addLog("▶ Сканирую: " .. target .. " (глубина " .. depth .. ")")
-        scanCounter = scanCounter + 1
-        
-        local timestamp = os.date("%Y-%m-%d_%H-%M-%S")
-        local extension = (fileFormat == "json") and ".json" or ".txt"
-        local fileName = "Scan_" .. target .. "_" .. timestamp .. "_num" .. scanCounter .. extension
-        local filePath = defaultFolder .. "/" .. fileName
-        
-        task.spawn(function()
-            local ok, data = pcall(function()
-                if fileFormat == "json" then
-                    local root = game:FindFirstChild(target)
-                    if root then
-                        return game:GetService("HttpService"):JSONEncode(toJsonTable(root, depth, 0))
-                    else
-                        error("Цель не найдена")
-                    end
-                else
-                    local root = game:FindFirstChild(target)
-                    if not root then error("Цель не найдена") end
-                    local header = "=== СКАН: " .. target .. " | " .. os.date("%Y-%m-%d %H:%M:%S") .. " | Глубина: " .. depth .. " ===\n\n"
-                    return header .. scanInstance(root, depth, 0)
-                end
-            end)
-            
-            if ok then
-                local writeOk, writeErr = pcall(function()
-                    writefile(filePath, data)
-                end)
-                if writeOk then
-                    addLog("✅ Сохранено: " .. filePath)
-                else
-                    addLog("❌ Ошибка записи: " .. tostring(writeErr))
-                end
-            else
-                addLog("❌ Ошибка: " .. tostring(data))
-            end
-        end)
+local function doScan()
+    local targetName = targetBox.Text
+    local depth = tonumber(depthBox.Text) or 3
+    local root = game:FindFirstChild(targetName)
+    if not root then
+        statusLabel.Text = "Ошибка: '" .. targetName .. "' не найден"
+        return
     end
-})
-
-MainTab:AddButton({
-    Name = "Открыть папку (путь)",
-    Callback = function()
-        addLog("📁 Все сканы в папке: " .. defaultFolder)
+    
+    scanCount = scanCount + 1
+    local timestamp = os.date("%Y-%m-%d_%H-%M-%S")
+    local ext = formatEnabled and ".txt" or ".json"
+    local fileName = "scan_" .. targetName .. "_" .. timestamp .. "_№" .. scanCount .. ext
+    local data = ""
+    
+    if formatEnabled then
+        local header = "=== СКАН: " .. targetName .. " | Глубина: " .. depth .. " | " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n\n"
+        data = header .. scanToText(root, depth, 0)
+    else
+        local tbl = scanToJsonTable(root, depth, 0)
+        local ok, json = pcall(function() return game:GetService("HttpService"):JSONEncode(tbl) end)
+        if not ok then
+            statusLabel.Text = "Ошибка JSON: " .. tostring(json)
+            return
+        end
+        data = json
     end
-})
+    
+    local writeOk, writeErr = pcall(function() writefile(fileName, data) end)
+    if writeOk then
+        statusLabel.Text = "✅ Сохранено: " .. fileName .. "\nПуть: workspace/" .. fileName
+    else
+        statusLabel.Text = "❌ Ошибка записи: " .. tostring(writeErr)
+    end
+end
 
--- Инициализация
-OrionLib:Init()
-addLog("Сканер готов. Жми 'Сканировать сейчас!'")
+scanButton.MouseButton1Click:Connect(doScan)
+scanButton.TouchTap:Connect(doScan)
+
+-- Кнопка закрытия (крестик)
+local closeButton = Instance.new("TextButton", mainFrame)
+closeButton.Text = "X"
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -25, 0, 0)
+closeButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+closeButton.TextColor3 = Color3.new(1,1,1)
+closeButton.Font = Enum.Font.SourceSansBold
+closeButton.TextSize = 14
+closeButton.BorderSizePixel = 0
+closeButton.MouseButton1Click:Connect(function() gui:Destroy() end)
+closeButton.TouchTap:Connect(function() gui:Destroy() end)
