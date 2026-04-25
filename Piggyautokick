@@ -1,362 +1,243 @@
 --[[
-    MM2 FULL WORKING SCRIPT - ORION LIBRARY
-    Всё работает: Auto Farm, ESP, Silent Aim, Fly, Inf Jump
-    Протестировано на актуальной версии MM2
+    ╔══════════════════════════════════════════════════════════════╗
+    ║   EXPLORER SCANNER – Delta Mobile Edition                 ║
+    ║   Сканирует ВСЁ + фильтр ESP/Anti-XXX + сохранение      ║
+    ║   в уникальный файл через writefile()                   ║
+    ╚══════════════════════════════════════════════════════════════╝
 ]]
 
--- Загрузка Orion
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Orion/main/source"))()
+-- 1. Загружаем Orion Library (самая стабильная для Delta)
+local OrionLib = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"
+))()
+
+-- 2. Создаём окно
 local Window = OrionLib:MakeWindow({
-    Name = "MM2 HUB | FULL",
+    Name = "🔍 Delta Explorer Scanner",
     HidePremium = false,
-    SaveConfig = true,
-    ConfigFolder = "MM2_FULL"
+    SaveConfig = false,   -- на Delta сохранение конфигов Orion не всегда работает, будем использовать свой файл
+    IntroEnabled = true,
+    IntroText = "DELTA MOBILE SCANNER"
 })
 
--- Сервисы
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local PathfindingService = game:GetService("PathfindingService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+-- 3. Вкладка
+local Tab = Window:MakeTab({
+    Name = "Сканер",
+    Icon = "rbxassetid://4483345998",
+    PremiumOnly = false
+})
 
--- Вкладки
-local MainTab = Window:MakeTab({Name = "Main", Icon = "rbxassetid://7733969142"})
-local ESPTab = Window:MakeTab({Name = "ESP", Icon = "rbxassetid://7733969142"})
-local AimbotTab = Window:MakeTab({Name = "Aimbot", Icon = "rbxassetid://7733969142"})
-local MiscTab = Window:MakeTab({Name = "Misc", Icon = "rbxassetid://7733969142"})
+-- 4. Какие сервисы сканируем
+local Targets = {
+    "Workspace",
+    "Lighting",
+    "ReplicatedStorage",
+    "ServerStorage",
+    "Players"
+}
 
--- ==================== AUTO FARM ====================
-local Farming = false
-local FarmConnection
+local SelectedTarget = "Workspace"
 
-local function getAllCoins()
-    local coins = {}
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.CanCollide and not obj.Anchored then
-            local name = obj.Name
-            -- Все возможные имена монет в MM2
-            if name == "Coin" or name == "CoinPickup" or name == "Candy" or name == "Coin_Server" then
-                table.insert(coins, obj)
-            end
+-- ============================================
+-- 5. КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФИЛЬТРА ESP / АНТИ-XXX
+--    Дополни сам, если нужно
+-- ============================================
+local KEYWORDS = {
+    "esp", "aimbot", "silent", "trigger", "wallhack",
+    "remote", "remotefunction", "remoteevent", "bindable",
+    "antichat", "anti", "cheat", "backdoor", "virus",
+    "script", "localscript", "modulescript",
+    "exploit", "inject", "hook", "bypass",
+    "esp", "box", "skeleton", "health", "distance",
+    "fly", "noclip", "speed", "jump", "inf",
+    "teleport", "farm", "autofarm", "collect"
+}
+
+-- 6. Функция: проверяет, содержит ли строка любое из ключевых слов
+local function matchesFilter(str)
+    str = str:lower()
+    for _, kw in ipairs(KEYWORDS) do
+        if str:find(kw:lower(), 1, true) then
+            return true
         end
-        -- Проверка внутри моделей
-        if obj:IsA("Model") and obj.Name == "Coin_Server" then
-            local coinPart = obj:FindFirstChild("Coin") or obj:FindFirstChild("CoinPickup")
-            if coinPart and coinPart:IsA("BasePart") then
-                table.insert(coins, coinPart)
+    end
+    return false
+end
+
+-- 7. Рекурсивный сбор ВСЕХ объектов с фильтрацией
+local function ScanAll(targetName)
+    local service = game:GetService(targetName)
+    local results = {}
+
+    local function recurse(parent, depth)
+        depth = depth or 0
+        for _, child in ipairs(parent:GetChildren()) do
+            local name = child.Name
+            local class = child.ClassName
+            local path = child:GetFullName()
+
+            -- Добавляем объект, если имя ИЛИ класс совпадает с фильтром
+            if matchesFilter(name) or matchesFilter(class) then
+                table.insert(results, {
+                    Name = name,
+                    ClassName = class,
+                    Path = path,
+                    Depth = depth
+                })
+            end
+
+            -- Заходим глубже
+            if #child:GetChildren() > 0 then
+                recurse(child, depth + 1)
             end
         end
     end
-    return coins
+
+    recurse(service)
+    return results
 end
 
-local function findNearestCoin()
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return nil end
-    local root = char.HumanoidRootPart
-    local nearest = nil
-    local minDist = math.huge
-    for _, coin in ipairs(getAllCoins()) do
-        if coin and coin.Parent then
-            local dist = (coin.Position - root.Position).Magnitude
-            if dist < minDist then
-                minDist = dist
-                nearest = coin
-            end
-        end
+-- 8. Переменные UI
+local Dropdown
+local SelectedObjectPath = ""
+
+-- 9. Обновление выпадающего списка объектов
+local function UpdateDropdown()
+    local objects = ScanAll(SelectedTarget)
+    local items = {}
+
+    for _, obj in ipairs(objects) do
+        local indent = string.rep("    ", obj.Depth)
+        table.insert(items, indent .. obj.Name .. " (" .. obj.ClassName .. ")")
     end
-    return nearest
+
+    if Dropdown then
+        Dropdown:Refresh(items, true)
+    end
+
+    -- Возвращаем количество найденного
+    return #objects
 end
 
-local function collectItem(item)
-    if not item or not item.Parent then return end
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-    local root = char.HumanoidRootPart
-    -- Метод 1: firetouchinterest
-    pcall(function()
-        firetouchinterest(root, item, 0)
-        firetouchinterest(root, item, 1)
+-- 10. Сохранение результатов в УНИКАЛЬНЫЙ файл
+local function SaveToFile()
+    local objects = ScanAll(SelectedTarget)
+    if #objects == 0 then
+        OrionLib:MakeNotification({
+            Name = "Пусто",
+            Content = "Нет объектов, соответствующих фильтру.",
+            Image = "rbxassetid://4483345998",
+            Time = 3
+        })
+        return
+    end
+
+    -- Генерируем имя файла с датой и временем
+    local now = os.date("%Y-%m-%d_%H-%M-%S")
+    local filename = "explorer_scan_" .. now .. ".txt"
+
+    -- Формируем содержимое
+    local lines = {}
+    table.insert(lines, "=== EXPLORER SCAN ===")
+    table.insert(lines, "Дата: " .. os.date("%Y-%m-%d %H:%M:%S"))
+    table.insert(lines, "Цель: " .. SelectedTarget)
+    table.insert(lines, "Найдено объектов: " .. #objects)
+    table.insert(lines, "------------------------")
+    for _, obj in ipairs(objects) do
+        table.insert(lines, obj.Path .. " [" .. obj.ClassName .. "]")
+    end
+    table.insert(lines, "=== КОНЕЦ ===")
+    local content = table.concat(lines, "\n")
+
+    -- Пытаемся записать файл через writefile (работает на Delta)
+    local success, err = pcall(function()
+        writefile(filename, content)
     end)
-    -- Метод 2: прямое перемещение (если первый не сработал)
-    pcall(function()
-        root.CFrame = item.CFrame + Vector3.new(0, 3, 0)
-        task.wait(0.05)
-    end)
-end
 
-MainTab:AddToggle({
-    Name = "Auto Farm Coins",
-    Default = false,
-    Callback = function(Value)
-        Farming = Value
-        if Value then
-            FarmConnection = RunService.Heartbeat:Connect(function()
-                if not Farming then return end
-                local char = LocalPlayer.Character
-                if not char then return end
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if not humanoid then return end
-                local coin = findNearestCoin()
-                if coin then
-                    humanoid:MoveTo(coin.Position)
-                    if (char.HumanoidRootPart.Position - coin.Position).Magnitude < 10 then
-                        collectItem(coin)
-                    end
-                end
-            end)
+    if success then
+        OrionLib:MakeNotification({
+            Name = "✅ Сохранено!",
+            Content = "Файл: " .. filename,
+            Image = "rbxassetid://4483345998",
+            Time = 5
+        })
+    else
+        -- Фолбэк: если writefile нет, пробуем delta:SaveScript (для Delta X)
+        local success2, err2 = pcall(function()
+            delta:SaveScript(filename, content, "scan")
+        end)
+        if success2 then
+            OrionLib:MakeNotification({
+                Name = "✅ Сохранено (Delta API)",
+                Content = "Скрипт сохранён в локальное меню Delta",
+                Image = "rbxassetid://4483345998",
+                Time = 5
+            })
         else
-            if FarmConnection then
-                FarmConnection:Disconnect()
-                FarmConnection = nil
-            end
+            OrionLib:MakeNotification({
+                Name = "❌ Ошибка сохранения",
+                Content = "writefile и delta:SaveScript недоступны. Проверь версию Delta.",
+                Image = "rbxassetid://4483345998",
+                Time = 5
+            })
         end
-    end
-})
-
--- ==================== ESP ====================
-local ESPEnabled = false
-local ESPObjects = {}
-
-local function createESP(player)
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "ESP_" .. player.Name
-    screenGui.Parent = LocalPlayer.PlayerGui
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 180, 0, 55)
-    frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    frame.BackgroundTransparency = 0.4
-    frame.BorderSizePixel = 0
-    frame.Parent = screenGui
-
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(1, 0, 0, 18)
-    nameLabel.Text = player.Name
-    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Font = Enum.Font.SourceSansBold
-    nameLabel.TextSize = 14
-    nameLabel.Parent = frame
-
-    local roleLabel = Instance.new("TextLabel")
-    roleLabel.Size = UDim2.new(1, 0, 0, 18)
-    roleLabel.Position = UDim2.new(0, 0, 0, 18)
-    roleLabel.Text = "Innocent"
-    roleLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-    roleLabel.BackgroundTransparency = 1
-    roleLabel.Font = Enum.Font.SourceSans
-    roleLabel.TextSize = 13
-    roleLabel.Parent = frame
-
-    local distLabel = Instance.new("TextLabel")
-    distLabel.Size = UDim2.new(1, 0, 0, 18)
-    distLabel.Position = UDim2.new(0, 0, 0, 36)
-    distLabel.Text = "0m"
-    distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    distLabel.BackgroundTransparency = 1
-    distLabel.Font = Enum.Font.SourceSans
-    distLabel.TextSize = 13
-    distLabel.Parent = frame
-
-    ESPObjects[player] = {
-        Gui = screenGui,
-        Frame = frame,
-        RoleLabel = roleLabel,
-        DistLabel = distLabel
-    }
-end
-
-local function updateESP()
-    for player, data in pairs(ESPObjects) do
-        if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-            data.Frame.Visible = false
-            continue
-        end
-        local root = player.Character.HumanoidRootPart
-        local screenPos, onScreen = Camera:WorldToScreenPoint(root.Position)
-        if onScreen then
-            data.Frame.Visible = true
-            data.Frame.Position = UDim2.new(0, screenPos.X - 90, 0, screenPos.Y - 80)
-        else
-            data.Frame.Visible = false
-        end
-
-        -- Определение роли
-        local role = "Innocent"
-        local char = player.Character
-        local backpack = player:FindFirstChild("Backpack")
-        if (backpack and backpack:FindFirstChild("SheriffPistol")) or (char and char:FindFirstChild("SheriffPistol")) then
-            role = "Sheriff"
-            data.RoleLabel.TextColor3 = Color3.fromRGB(0, 150, 255)
-        elseif (backpack and backpack:FindFirstChild("Knife")) or (char and char:FindFirstChild("Knife")) then
-            role = "Murderer"
-            data.RoleLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-        else
-            data.RoleLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-        end
-        data.RoleLabel.Text = role
-        data.DistLabel.Text = math.floor((root.Position - Camera.CFrame.Position).Magnitude) .. "m"
     end
 end
 
-ESPTab:AddToggle({
-    Name = "Player ESP",
-    Default = false,
-    Callback = function(Value)
-        ESPEnabled = Value
-        if Value then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    createESP(player)
-                end
-            end
-            Players.PlayerAdded:Connect(function(player)
-                if ESPEnabled then createESP(player) end
-            end)
-            Players.PlayerRemoving:Connect(function(player)
-                if ESPObjects[player] then
-                    ESPObjects[player].Gui:Destroy()
-                    ESPObjects[player] = nil
-                end
-            end)
-        else
-            for _, data in pairs(ESPObjects) do
-                data.Gui:Destroy()
-            end
-            ESPObjects = {}
-        end
-    end
-})
+-- ============================================
+-- 11. ЭЛЕМЕНТЫ ИНТЕРФЕЙСА
+-- ============================================
 
-RunService.RenderStepped:Connect(function()
-    if ESPEnabled then updateESP() end
-end)
-
--- ==================== AIMBOT ====================
-local SilentAim = false
-local AimConnection
-
-AimbotTab:AddToggle({
-    Name = "Silent Aim",
-    Default = false,
-    Callback = function(Value)
-        SilentAim = Value
-        if Value then
-            AimConnection = RunService.RenderStepped:Connect(function()
-                local char = LocalPlayer.Character
-                if not char then return end
-                local tool = char:FindFirstChildOfClass("Tool") or LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
-                if not tool or not tool:FindFirstChild("Handle") then return end
-                local nearest = nil
-                local minDist = math.huge
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-                        local head = player.Character.Head
-                        local dist = (head.Position - char.Head.Position).Magnitude
-                        if dist < minDist then
-                            minDist = dist
-                            nearest = head
-                        end
-                    end
-                end
-                if nearest then
-                    tool.Handle.CFrame = CFrame.new(tool.Handle.Position, nearest.Position)
-                end
-            end)
-        else
-            if AimConnection then
-                AimConnection:Disconnect()
-                AimConnection = nil
-            end
-        end
-    end
-})
-
--- ==================== MISC ====================
-MiscTab:AddToggle({
-    Name = "Infinite Jump",
-    Default = false,
-    Callback = function(Value)
-        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-        local humanoid = char:WaitForChild("Humanoid")
-        if Value then
-            humanoid.JumpPower = 150
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-        else
-            humanoid.JumpPower = 50
-        end
-    end
-})
-
-MiscTab:AddToggle({
-    Name = "Fly",
-    Default = false,
-    Callback = function(Value)
-        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-        local root = char:WaitForChild("HumanoidRootPart")
-        if Value then
-            local bodyVel = Instance.new("BodyVelocity")
-            bodyVel.MaxForce = Vector3.new(1, 1, 1) * 1e6
-            bodyVel.Velocity = Vector3.zero
-            bodyVel.Name = "FlyVelocity"
-            bodyVel.Parent = root
-
-            local bodyGyro = Instance.new("BodyGyro")
-            bodyGyro.MaxTorque = Vector3.new(1, 1, 1) * 1e6
-            bodyGyro.CFrame = root.CFrame
-            bodyGyro.Name = "FlyGyro"
-            bodyGyro.Parent = root
-
-            local flyLoop
-            flyLoop = RunService.RenderStepped:Connect(function()
-                if not Value or not root:FindFirstChild("FlyVelocity") then
-                    flyLoop:Disconnect()
-                    return
-                end
-                local move = Vector3.zero
-                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += Camera.CFrame.LookVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= Camera.CFrame.LookVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= Camera.CFrame.RightVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += Camera.CFrame.RightVector end
-                bodyVel.Velocity = move * 50
-                bodyGyro.CFrame = Camera.CFrame
-            end)
-        else
-            if root:FindFirstChild("FlyVelocity") then root.FlyVelocity:Destroy() end
-            if root:FindFirstChild("FlyGyro") then root.FlyGyro:Destroy() end
-        end
-    end
-})
-
-MiscTab:AddButton({
-    Name = "Remove Walk Sound",
+-- Кнопка «Сканировать и сохранить» (основное действие)
+Tab:AddButton({
+    Name = "🔎 Сканировать и сохранить в файл",
     Callback = function()
-        local char = LocalPlayer.Character
-        if char then
-            for _, obj in ipairs(char:GetDescendants()) do
-                if obj:IsA("Sound") then
-                    obj:Destroy()
-                end
+        local count = UpdateDropdown()
+        SaveToFile()
+    end
+})
+
+-- Выбор сервиса
+Tab:AddDropdown({
+    Name = "🎯 Цель",
+    Default = "Workspace",
+    Options = Targets,
+    Callback = function(val)
+        SelectedTarget = val
+        UpdateDropdown()
+    end
+})
+
+-- Выпадающий список найденных объектов (для просмотра на экране)
+Dropdown = Tab:AddDropdown({
+    Name = "📦 Найденные объекты",
+    Default = "",
+    Options = {},
+    Callback = function(val)
+        local objects = ScanAll(SelectedTarget)
+        for _, obj in ipairs(objects) do
+            local indent = string.rep("    ", obj.Depth)
+            local displayed = indent .. obj.Name .. " (" .. obj.ClassName .. ")"
+            if displayed == val then
+                SelectedObjectPath = obj.Path
+                break
             end
         end
     end
 })
 
-MiscTab:AddButton({
-    Name = "Respawn",
+-- Кнопка «Показать в консоли» (для отладки)
+Tab:AddButton({
+    Name = "🖨️ Вывести в консоль (F9)",
     Callback = function()
-        local char = LocalPlayer.Character
-        if char and char:FindFirstChild("Humanoid") then
-            char.Humanoid.Health = 0
+        local objects = ScanAll(SelectedTarget)
+        print("=== НАЙДЕННЫЕ ОБЪЕКТЫ ===")
+        for _, obj in ipairs(objects) do
+            print(obj.Path .. " [" .. obj.ClassName .. "]")
         end
+        print("=== ВСЕГО: " .. #objects .. " ===")
     end
 })
 
--- Инициализация
+-- 12. Завершаем инициализацию
 OrionLib:Init()
-print("MM2 FULL SCRIPT LOADED SUCCESSFULLY")
