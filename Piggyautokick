@@ -1,348 +1,400 @@
 --[[
-   MM2 INFINITY HUB — ПРОБУЖДЕНИЕ БОГА
-   Версия: ∞.0 | Orion UI | Delta X / CodeX
-   Разработан лично для чистого доминирования
+   ZOMBIE LAB MEGA HUB (Orion)
+   v1.0 — Властелин лаборатории
 --]]
 
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 local Window = OrionLib:MakeWindow({
-    Name = "MM2 INFINITY • " .. game.Players.LocalPlayer.Name,
+    Name = "ZOMBIE LAB HUB",
     HidePremium = false,
     SaveConfig = false,
-    ConfigFolder = "MM2_Infinity"
+    ConfigFolder = "ZombieLab_Config"
 })
 
--- Сервисы
 local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+local WS = game:GetService("Workspace")
 local RS = game:GetService("ReplicatedStorage")
-local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local Workspace = game:GetService("Workspace")
-local LocalPlayer = Players.LocalPlayer
+local UserInputService = game:GetService("UserInputService")
 
--- Вспомогательные функции
+-- Удобная функция получения персонажа
 local function getChar()
-    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    return LP.Character or LP.CharacterAdded:Wait()
 end
 
-local function getTool(name)
-    local char = getChar()
-    for _, v in ipairs(char:GetChildren()) do
-        if v:IsA("Tool") and v.Name:lower():find(name) then
-            return v
+-- Поиск всех зомби (обычно это модель NPC с Humanoid)
+local function getZombies()
+    local zombies = {}
+    for _, obj in ipairs(WS:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("Head") then
+            -- Отсеиваем своих игроков
+            local isPlayer = false
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl.Character == obj then
+                    isPlayer = true
+                    break
+                end
+            end
+            if not isPlayer then
+                table.insert(zombies, obj)
+            end
         end
     end
-    return nil
-end
-
-local function fireRemote(remoteName, ...)
-    local remotes = RS:FindFirstChild("Remotes") or RS:FindFirstChild("Events")
-    if remotes then
-        local r = remotes:FindFirstChild(remoteName)
-        if r and r:IsA("RemoteEvent") then
-            r:FireServer(...)
-        end
-    end
+    return zombies
 end
 
 -- Вкладки
-local MainTab = Window:MakeTab({Name = "⚡ Главная"})
-local CombatTab = Window:MakeTab({Name = "🎯 Бой"})
-local VisualsTab = Window:MakeTab({Name = "👁️ Визуал"})
-local FarmTab = Window:MakeTab({Name = "🪙 Фарм"})
-local TeleportTab = Window:MakeTab({Name = "🌀 Телепорт"})
-local MiscTab = Window:MakeTab({Name = "🛠 Разное"})
+local MainTab = Window:MakeTab({Name = "Главная"})
+local CombatTab = Window:MakeTab({Name = "Бой/Оружие"})
+local FarmTab = Window:MakeTab({Name = "Фарм"})
+local VisualsTab = Window:MakeTab({Name = "Визуал"})
+local WorldTab = Window:MakeTab({Name = "Волны/Мир"})
+local MiscTab = Window:MakeTab({Name = "Прочее"})
 
 -- ================== ГЛАВНАЯ ==================
-MainTab:AddLabel("Твои параметры бога")
+MainTab:AddLabel("Основные читы")
 
-MainTab:AddToggle({Name = "GodMode (Бессмертие)", Default = false, Callback = function(v)
-    if v then
-        local char = getChar()
-        char.Humanoid.MaxHealth = math.huge
-        char.Humanoid.Health = math.huge
-        while v and task.wait(0.3) do
-            if char and char.Humanoid then
+MainTab:AddToggle({
+    Name = "God Mode (Бесконечное HP)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            local char = getChar()
+            if char and char:FindFirstChild("Humanoid") then
+                char.Humanoid.MaxHealth = math.huge
                 char.Humanoid.Health = math.huge
-            else
-                char = getChar()
+                task.wait(0.3)
             end
         end
     end
-end})
+})
 
-MainTab:AddSlider({Name = "Скорость", Min = 16, Max = 300, Default = 16, Color = Color3.fromRGB(0,255,0), Increment = 1, ValueName = "studs", Callback = function(val)
-    local char = getChar()
-    if char and char.Humanoid then char.Humanoid.WalkSpeed = val end
-end})
-
-MainTab:AddSlider({Name = "Прыжок", Min = 50, Max = 500, Default = 50, Color = Color3.fromRGB(255,255,0), Increment = 1, ValueName = "power", Callback = function(val)
-    local char = getChar()
-    if char and char.Humanoid then char.Humanoid.JumpPower = val end
-end})
-
-MainTab:AddToggle({Name = "Infinite Jump", Default = false, Callback = function(v)
-    local char = getChar()
-    while v do
-        if char and char:FindFirstChild("Humanoid") and char.Humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
-            char.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-        end
-        task.wait()
-    end
-end})
-
-MainTab:AddToggle({Name = "Fly (Полёт)", Default = false, Callback = function(v)
-    local char = getChar()
-    local bv
-    if v then
-        bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
-        bv.Parent = char.HumanoidRootPart
-        while v do
-            local vel = Vector3.zero
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then vel += char.HumanoidRootPart.CFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then vel -= char.HumanoidRootPart.CFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then vel -= char.HumanoidRootPart.CFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then vel += char.HumanoidRootPart.CFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vel += Vector3.yAxis end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then vel -= Vector3.yAxis end
-            bv.Velocity = vel * 100
-            task.wait()
-        end
-        bv:Destroy()
-    elseif bv then
-        bv:Destroy()
-    end
-end})
-
-MainTab:AddToggle({Name = "Noclip", Default = false, Callback = function(v)
-    local char = getChar()
-    while v do
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
-        end
-        task.wait(0.1)
-    end
-end})
-
--- ================== БОЙ ==================
-CombatTab:AddLabel("Маньяк / Шериф — власть в твоих руках")
-
-CombatTab:AddToggle({Name = "Silent Aim (Аим)", Default = false, Callback = function(v)
-    local gun = getTool("gun")
-    while v do
-        if gun and gun:IsA("Tool") and getChar():FindFirstChild("HumanoidRootPart") then
-            local nearest, dist = nil, 100
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Head") then
-                    local d = (p.Character.Head.Position - getChar().HumanoidRootPart.Position).Magnitude
-                    if d < dist then nearest = p.Character.Head; dist = d end
+MainTab:AddToggle({
+    Name = "NoClip (Сквозь стены)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            local char = getChar()
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
                 end
             end
-            if nearest then
-                local cam = Workspace.CurrentCamera
-                cam.CFrame = CFrame.new(cam.CFrame.Position, nearest.Position)
-            end
-        end
-        task.wait()
-    end
-end})
-
-CombatTab:AddButton({Name = "Kill All (Маньяк)", Callback = function()
-    local knife = getTool("knife")
-    if not knife then return OrionLib:MakeNotification({Name = "Ошибка", Content = "Возьми нож!", Time = 2}) end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-            getChar().HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame * CFrame.new(0,0,3)
-            task.wait(0.05)
-            knife:Activate()
-            task.wait(0.08)
+            task.wait(0.1)
         end
     end
-    OrionLib:MakeNotification({Name = "Резня", Content = "Все мертвы!", Time = 2})
-end})
+})
 
-CombatTab:AddToggle({Name = "Auto Kill Murderer (Шериф)", Default = false, Callback = function(v)
-    while v do
-        local gun = getTool("gun")
-        if gun then
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer and (p.Backpack:FindFirstChild("Knife") or (p.Character and p.Character:FindFirstChild("Knife"))) then
-                    if p.Character and p.Character:FindFirstChild("Head") then
-                        getChar().HumanoidRootPart.CFrame = p.Character.Head.CFrame * CFrame.new(0,3,0)
-                        task.wait(0.1)
-                        gun:Activate()
-                        task.wait(0.3)
-                        break
+MainTab:AddSlider({
+    Name = "Скорость передвижения",
+    Min = 16, Max = 200, Default = 16,
+    Color = Color3.fromRGB(0, 255, 0),
+    Increment = 1, ValueName = "studs/s",
+    Callback = function(val)
+        getChar().Humanoid.WalkSpeed = val
+    end
+})
+
+MainTab:AddSlider({
+    Name = "Прыжок",
+    Min = 50, Max = 300, Default = 50,
+    Color = Color3.fromRGB(255, 255, 0),
+    Increment = 1, ValueName = "power",
+    Callback = function(val)
+        getChar().Humanoid.JumpPower = val
+    end
+})
+
+-- ================== БОЙ/ОРУЖИЕ ==================
+CombatTab:AddLabel("Оружие и убийство зомби")
+
+CombatTab:AddToggle({
+    Name = "Infinite Ammo (Беск. патроны)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            local char = getChar()
+            for _, tool in ipairs(char:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local ammo = tool:FindFirstChild("Ammo") or tool:FindFirstChild("AmmoValue")
+                    if ammo and ammo:IsA("IntValue") or ammo:IsA("NumberValue") then
+                        ammo.Value = 9999
                     end
                 end
             end
+            task.wait(0.5)
         end
-        task.wait(0.5)
     end
-end})
+})
 
-CombatTab:AddButton({Name = "Дать пистолет (Grab Gun)", Callback = function()
-    for _, v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("Tool") and v.Name:lower():find("gun") and v.Parent ~= getChar() then
-            getChar().HumanoidRootPart.CFrame = v.Handle.CFrame
-            wait(0.1)
-            fireproximityprompt(v:FindFirstChildOfClass("ProximityPrompt"))
-            return
+CombatTab:AddButton({
+    Name = "Kill All Zombies (убить всех зомби)",
+    Callback = function()
+        local zombies = getZombies()
+        for _, z in ipairs(zombies) do
+            z.Humanoid.Health = 0
+        end
+        OrionLib:MakeNotification({Name = "Резня", Content = #zombies .. " зомби убито", Time = 2})
+    end
+})
+
+CombatTab:AddButton({
+    Name = "Дать всё оружие (спавн)",
+    Callback = function()
+        -- Попытка через ремонтажные события
+        local giveEvent = RS:FindFirstChild("GiveWeapon") or RS:FindFirstChild("GiveTool") or RS:FindFirstChild("WeaponEvent")
+        if giveEvent and giveEvent:IsA("RemoteEvent") then
+            giveEvent:FireServer("All")
+            OrionLib:MakeNotification({Name = "Оружие", Content = "Запрос отправлен", Time = 2})
+        else
+            OrionLib:MakeNotification({Name = "Ошибка", Content = "Событие не найдено, пробуйте другие функции", Time = 2})
         end
     end
-    OrionLib:MakeNotification({Name = "Поиск", Content = "Пистолета нет на карте", Time = 2})
-end})
+})
+
+CombatTab:AddToggle({
+    Name = "Auto Aim (автоприцеливание на зомби)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            local char = getChar()
+            local nearestZombie, minDist = nil, 50
+            for _, z in ipairs(getZombies()) do
+                if z:FindFirstChild("Head") then
+                    local dist = (z.Head.Position - char.HumanoidRootPart.Position).Magnitude
+                    if dist < minDist then
+                        nearestZombie = z.Head
+                        minDist = dist
+                    end
+                end
+            end
+            if nearestZombie then
+                task.spawn(function()
+                    fireclickdetector(nearestZombie:FindFirstChildOfClass("ClickDetector"))
+                end)
+                -- Поворачиваем персонажа к цели
+                char.HumanoidRootPart.CFrame = CFrame.lookAt(char.HumanoidRootPart.Position, nearestZombie.Position)
+            end
+            task.wait()
+        end
+    end
+})
+
+-- ================== ФАРМ ==================
+FarmTab:AddLabel("Автофарм монет/валюты")
+
+FarmTab:AddToggle({
+    Name = "Auto Collect Money (подбирать деньги)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            local char = getChar()
+            for _, obj in ipairs(WS:GetDescendants()) do
+                if obj.Name == "Money" or obj.Name == "Coin" or obj.Name == "Cash" then
+                    if obj:IsA("BasePart") then
+                        char.HumanoidRootPart.CFrame = obj.CFrame
+                        task.wait(0.1)
+                    elseif obj:IsA("Tool") and obj:FindFirstChild("Handle") then
+                        char.HumanoidRootPart.CFrame = obj.Handle.CFrame
+                        task.wait(0.1)
+                    end
+                end
+            end
+            task.wait(0.5)
+        end
+    end
+})
+
+FarmTab:AddToggle({
+    Name = "Auto Farm XP (опыт)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            -- Пробуем подбирать объекты опыта или убивать зомби
+            local zombies = getZombies()
+            if #zombies > 0 then
+                for _, z in ipairs(zombies) do
+                    z.Humanoid.Health = 0
+                    task.wait(0.1)
+                end
+            end
+            task.wait(2)
+        end
+    end
+})
+
+FarmTab:AddToggle({
+    Name = "Auto Upgrade (автопрокачка)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            local char = getChar()
+            for _, btn in ipairs(WS:GetDescendants()) do
+                if (btn.Name == "Upgrade" or btn.Name == "Buy") and btn:IsA("ProximityPrompt") then
+                    fireproximityprompt(btn)
+                end
+            end
+            task.wait(1)
+        end
+    end
+})
 
 -- ================== ВИЗУАЛ ==================
-VisualsTab:AddToggle({Name = "ESP Boxes", Default = false, Callback = function(v)
-    local boxes = {}
-    while v do
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Head") then
-                local head = p.Character.Head
-                local gui = head:FindFirstChild("ESPBox")
-                if not gui then
-                    gui = Instance.new("BillboardGui")
-                    gui.Name = "ESPBox"
-                    gui.Size = UDim2.new(0, 100, 0, 30)
-                    gui.StudsOffset = Vector3.new(0, 2, 0)
-                    gui.Parent = head
-                    local tl = Instance.new("TextLabel")
-                    tl.Size = UDim2.new(1,0,1,0)
-                    tl.BackgroundTransparency = 1
-                    tl.Text = p.Name
-                    tl.TextColor3 = Color3.new(1,1,1)
-                    tl.BackgroundColor3 = Color3.new(0,0,0)
-                    tl.Parent = gui
+VisualsTab:AddLabel("ESP и настройки видимости")
+
+VisualsTab:AddToggle({
+    Name = "ESP Zombies (подсветка зомби)",
+    Default = false,
+    Callback = function(val)
+        local highlights = {}
+        while val do
+            for _, z in ipairs(getZombies()) do
+                if not highlights[z] then
+                    local hl = Instance.new("Highlight")
+                    hl.FillColor = Color3.fromRGB(255, 0, 0)
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    hl.Parent = z
+                    highlights[z] = hl
+                end
+            end
+            -- Удаляем подсветку с мёртвых
+            for z, hl in pairs(highlights) do
+                if not z.Parent or z.Humanoid.Health <= 0 then
+                    hl:Destroy()
+                    highlights[z] = nil
+                end
+            end
+            task.wait(2)
+        end
+        -- очистка при выключении
+        for _, hl in pairs(highlights) do hl:Destroy() end
+    end
+})
+
+VisualsTab:AddToggle({
+    Name = "ESP Items (подсветка лута)",
+    Default = false,
+    Callback = function(val)
+        local itemList = {}
+        while val do
+            for _, obj in ipairs(WS:GetDescendants()) do
+                if (obj.Name == "Money" or obj.Name == "Coin" or obj.Name == "Weapon" or obj.Name == "Loot") and obj:IsA("BasePart") then
+                    if not obj:FindFirstChild("ESP_Highlight") then
+                        local hl = Instance.new("Highlight")
+                        hl.Name = "ESP_Highlight"
+                        hl.FillColor = Color3.fromRGB(0, 255, 0)
+                        hl.Parent = obj
+                        itemList[obj] = hl
+                    end
+                end
+            end
+            task.wait(3)
+        end
+        for _, hl in pairs(itemList) do hl:Destroy() end
+    end
+})
+
+VisualsTab:AddToggle({
+    Name = "Full Bright (яркий свет)",
+    Default = false,
+    Callback = function(val)
+        local lighting = game:GetService("Lighting")
+        if val then
+            lighting.Brightness = 2
+            lighting.GlobalShadows = false
+            lighting.FogEnd = 1e6
+        else
+            lighting.Brightness = 1
+            lighting.GlobalShadows = true
+            lighting.FogEnd = 10000
+        end
+    end
+})
+
+-- ================== ВОЛНЫ/МИР ==================
+WorldTab:AddLabel("Управление волнами")
+
+WorldTab:AddButton({
+    Name = "Пропустить текущую волну",
+    Callback = function()
+        local waveEvent = RS:FindFirstChild("NextWave") or RS:FindFirstChild("SkipWave")
+        if waveEvent and waveEvent:IsA("RemoteEvent") then
+            waveEvent:FireServer()
+            OrionLib:MakeNotification({Name = "Волна", Content = "Пропущена", Time = 2})
+        else
+            OrionLib:MakeNotification({Name = "Ошибка", Content = "Не удалось пропустить", Time = 2})
+        end
+    end
+})
+
+WorldTab:AddButton({
+    Name = "Установить волну 99 (макс)",
+    Callback = function()
+        -- Попытка изменить номер волны через NumberValue
+        for _, val in ipairs(WS:GetDescendants()) do
+            if val.Name == "Wave" or val.Name == "WaveNumber" then
+                if val:IsA("IntValue") or val:IsA("NumberValue") then
+                    val.Value = 99
                 end
             end
         end
-        task.wait(0.5)
+        OrionLib:MakeNotification({Name = "Волна", Content = "Установлена волна 99", Time = 2})
     end
-    -- очистка
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Character and p.Character:FindFirstChild("Head") then
-            local gui = p.Character.Head:FindFirstChild("ESPBox")
-            if gui then gui:Destroy() end
-        end
-    end
-end})
+})
 
-VisualsTab:AddToggle({Name = "FullBright", Default = false, Callback = function(v)
-    Lighting = game:GetService("Lighting")
-    if v then
-        Lighting.Brightness = 2
-        Lighting.GlobalShadows = false
-        Lighting.FogEnd = 1e9
-    else
-        Lighting.Brightness = 1
-        Lighting.GlobalShadows = true
-        Lighting.FogEnd = 10000
-    end
-end})
-
-VisualsTab:AddToggle({Name = "Chams (Подсветка)", Default = false, Callback = function(v)
-    local highlights = {}
-    while v do
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character and not highlights[p.UserId] then
-                local hl = Instance.new("Highlight")
-                hl.FillColor = Color3.new(1,0,0)
-                hl.Parent = p.Character
-                highlights[p.UserId] = hl
+WorldTab:AddButton({
+    Name = "Убрать всех зомби навсегда",
+    Callback = function()
+        task.spawn(function()
+            while true do
+                for _, z in ipairs(getZombies()) do
+                    z:Destroy()
+                end
+                task.wait(0.5)
             end
-        end
-        task.wait(1)
+        end)
+        OrionLib:MakeNotification({Name = "Геноцид", Content = "Зомби удаляются бесконечно", Time = 2})
     end
-    for _, hl in pairs(highlights) do hl:Destroy() end
-end})
+})
 
--- ================== ФАРМ ==================
-FarmTab:AddToggle({Name = "Auto Collect Coins", Default = false, Callback = function(v)
-    while v do
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if (obj.Name == "Coin" or obj.Name == "Coin_Server" or obj.Name == "BeachBall") and obj:IsA("BasePart") then
-                getChar().HumanoidRootPart.CFrame = obj.CFrame
-                task.wait(0.1)
-            end
-        end
-        task.wait(0.2)
-    end
-end})
-
-FarmTab:AddToggle({Name = "Auto XP Farm", Default = false, Callback = function(v)
-    while v do
-        fireRemote("AddExp", 100) -- пример, зависит от игры
-        task.wait(1)
-    end
-end})
-
--- ================== ТЕЛЕПОРТ ==================
-TeleportTab:AddButton({Name = "К маньяку", Callback = function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if (p.Backpack:FindFirstChild("Knife") or (p.Character and p.Character:FindFirstChild("Knife"))) and p.Character then
-            getChar().HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame + Vector3.new(0,3,0)
-            return
-        end
-    end
-end})
-
-TeleportTab:AddButton({Name = "К шерифу", Callback = function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if (p.Backpack:FindFirstChild("Gun") or (p.Character and p.Character:FindFirstChild("Gun"))) and p.Character then
-            getChar().HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame + Vector3.new(0,3,0)
-            return
-        end
-    end
-end})
-
-TeleportTab:AddButton({Name = "На спавн", Callback = function()
-    for _, v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("SpawnLocation") then
-            getChar().HumanoidRootPart.CFrame = v.CFrame + Vector3.new(0,3,0)
-            return
-        end
-    end
-end})
-
--- ================== РАЗНОЕ ==================
-MiscTab:AddButton({Name = "Crash Player (выбрать цель)", Callback = function()
-    -- Упрощённый краш через перегрузку
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            -- метод с бесконечным созданием частей
-            for i=1,100 do
-                local part = Instance.new("Part")
-                part.Size = Vector3.new(50,50,50)
-                part.CFrame = p.Character and p.Character.Head.CFrame or CFrame.new(0,0,0)
-                part.Parent = Workspace
+-- ================== ПРОЧЕЕ ==================
+MiscTab:AddLabel("Дополнительно")
+MiscTab:AddButton({
+    Name = "Телепорт к торговому автомату",
+    Callback = function()
+        for _, obj in ipairs(WS:GetDescendants()) do
+            if obj.Name:lower():find("shop") or obj.Name:lower():find("vendor") then
+                if obj:IsA("BasePart") or obj:IsA("Model") then
+                    getChar().HumanoidRootPart.CFrame = obj.PrimaryPart.CFrame + Vector3.new(0,3,0)
+                    return
+                end
             end
         end
     end
-    OrionLib:MakeNotification({Name = "Краш", Content = "Игроки вылетают...", Time = 2})
-end})
+})
 
-MiscTab:AddToggle({Name = "Anti-AFK", Default = false, Callback = function(v)
-    while v do
-        getChar().HumanoidRootPart.CFrame = getChar().HumanoidRootPart.CFrame * CFrame.new(0,0,0)
-        task.wait(60)
-    end
-end})
-
-MiscTab:AddButton({Name = "Вскрыть роли в чате", Callback = function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        local role = "Невиновный"
-        if p.Backpack:FindFirstChild("Knife") or (p.Character and p.Character:FindFirstChild("Knife")) then
-            role = "МАНЬЯК"
-        elseif p.Backpack:FindFirstChild("Gun") or (p.Character and p.Character:FindFirstChild("Gun")) then
-            role = "ШЕРИФ"
+MiscTab:AddButton({
+    Name = "Телепорт к столу улучшений",
+    Callback = function()
+        for _, obj in ipairs(WS:GetDescendants()) do
+            if obj.Name:lower():find("upgrade") and (obj:IsA("BasePart") or obj:IsA("Model")) then
+                getChar().HumanoidRootPart.CFrame = obj:IsA("Model") and obj.PrimaryPart.CFrame + Vector3.new(0,3,0) or obj.CFrame + Vector3.new(0,3,0)
+                return
+            end
         end
-        RS.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(p.Name .. " - " .. role, "All")
     end
-end})
+})
 
--- Завершение
+MiscTab:AddToggle({
+    Name = "Anti-AFK (анти бездействие)",
+    Default = false,
+    Callback = function(val)
+        while val do
+            getChar().HumanoidRootPart.CFrame = getChar().HumanoidRootPart.CFrame * CFrame.new(0, 0, 0)
+            task.wait(60)
+        end
+    end
+})
+
 OrionLib:Init()
-OrionLib:MakeNotification({Name = "MM2 INFINITY", Content = "Бог пробудился. Уничтожай.", Time = 3})
