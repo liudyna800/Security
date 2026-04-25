@@ -1,205 +1,444 @@
 --[[
-   УЛЬТИМАТИВНЫЙ СКАННЕР ДЛЯ DELTA (БЕЗ БИБЛИОТЕК)
-   - Свой GUI (работает всегда)
-   - Уникальные файлы с датой/временем
-   - Сохраняет в workspace Delta
-]]--
+   ULTIMATE DAYCARE HUB — PARWAZ STUDIOS
+   Работает на Orion UI, для Delta X/мобилы/ПК
+   Все найденные эксплоиты, кнопки, лазейки
+]]
 
-local player = game.Players.LocalPlayer
-local runService = game["Run Service"]
-local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-gui.Name = "ScannerUltimate"
-gui.ResetOnSpawn = false
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
+local Window = OrionLib:MakeWindow({Name = "DAYCARE MEGA HUB", HidePremium = false, SaveConfig = false, ConfigFolder = "DaycareConfig"})
 
--- Для удобства
-local function makeLabel(parent, text, position, size)
-    local l = Instance.new("TextLabel", parent)
-    l.Text = text
-    l.Position = position
-    l.Size = size
-    l.Font = Enum.Font.SourceSans
-    l.TextSize = 14
-    l.TextColor3 = Color3.new(1,1,1)
-    l.BackgroundTransparency = 1
-    return l
+-- Вспомогательные функции
+local plr = game.Players.LocalPlayer
+local ws = game.Workspace
+local replicated = game.ReplicatedStorage
+
+local function findFirst(name, parent)
+    parent = parent or ws
+    return parent:FindFirstChild(name)
 end
 
-local function makeButton(parent, text, position, size, callback)
-    local b = Instance.new("TextButton", parent)
-    b.Text = text
-    b.Position = position
-    b.Size = size
-    b.Font = Enum.Font.SourceSans
-    b.TextSize = 14
-    b.TextColor3 = Color3.new(1,1,1)
-    b.BackgroundColor3 = Color3.fromRGB(40,40,40)
-    b.BorderSizePixel = 0
-    b.AutoButtonColor = false
-    b.MouseButton1Click:Connect(callback)
-    b.TouchTap:Connect(callback) -- для телефона
-    return b
+local function fireClickDetector(obj)
+    if obj and obj:IsA("ClickDetector") then
+        fireclickdetector(obj)
+    end
 end
 
-local function makeTextBox(parent, placeholder, position, size)
-    local t = Instance.new("TextBox", parent)
-    t.PlaceholderText = placeholder
-    t.Text = ""
-    t.Position = position
-    t.Size = size
-    t.Font = Enum.Font.SourceSans
-    t.TextSize = 14
-    t.TextColor3 = Color3.new(0,0,0)
-    t.BackgroundColor3 = Color3.new(1,1,1)
-    t.BorderSizePixel = 1
-    return t
+local function fireProximityPrompt(obj)
+    if obj and obj:IsA("ProximityPrompt") then
+        fireproximityprompt(obj)
+    end
 end
 
--- Основные элементы интерфейса
-local mainFrame = Instance.new("Frame", gui)
-mainFrame.Size = UDim2.new(0, 300, 0, 400)
-mainFrame.Position = UDim2.new(0.5, -150, 0.5, -200)
-mainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Draggable = true
+-- Вкладки
+local TabPatient = Window:MakeTab({Name = "Пациент (Ребёнок)", Icon = "rbxassetid://4483345998"})
+local TabScientist = Window:MakeTab({Name = "Учёный", Icon = "rbxassetid://4483345998"})
+local TabAny = Window:MakeTab({Name = "Для всех", Icon = "rbxassetid://4483345998"})
+local TabTeleports = Window:MakeTab({Name = "Телепорты", Icon = "rbxassetid://4483345998"})
+local TabMisc = Window:MakeTab({Name = "Прочее", Icon = "rbxassetid://4483345998"})
 
-local targetLabel = makeLabel(mainFrame, "Цель:", UDim2.new(0, 10, 0, 10), UDim2.new(0, 80, 0, 20))
-local targetBox = makeTextBox(mainFrame, "Workspace", UDim2.new(0, 100, 0, 10), UDim2.new(0, 180, 0, 20))
-targetBox.Text = "Workspace"
+-- =================== ПАЦИЕНТ ===================
+TabPatient:AddLabel("🐣 Задания пациента")
 
-local depthLabel = makeLabel(mainFrame, "Глубина:", UDim2.new(0, 10, 0, 40), UDim2.new(0, 80, 0, 20))
-local depthBox = makeTextBox(mainFrame, "3", UDim2.new(0, 100, 0, 40), UDim2.new(0, 60, 0, 20))
-depthBox.Text = "3"
-
-local propsEnabled = true
-local propsButton = makeButton(mainFrame, "Свойства: ВКЛ", UDim2.new(0, 170, 0, 40), UDim2.new(0, 110, 0, 20), function()
-    propsEnabled = not propsEnabled
-    propsButton.Text = propsEnabled and "Свойства: ВКЛ" or "Свойства: ВЫКЛ"
-end)
-
-local formatEnabled = true  -- true = txt, false = json
-local formatButton = makeButton(mainFrame, "Формат: TXT", UDim2.new(0, 10, 0, 70), UDim2.new(0, 110, 0, 20), function()
-    formatEnabled = not formatEnabled
-    formatButton.Text = formatEnabled and "Формат: TXT" or "Формат: JSON"
-end)
-
-local scanButton = makeButton(mainFrame, "СКАНИРОВАТЬ", UDim2.new(0, 10, 0, 100), UDim2.new(0, 280, 0, 30), nil)
-local statusLabel = makeLabel(mainFrame, "Готов", UDim2.new(0, 10, 0, 140), UDim2.new(0, 280, 0, 20))
-statusLabel.TextWrapped = true
-
-local filesButton = makeButton(mainFrame, "Показать сохр. файлы", UDim2.new(0, 10, 0, 170), UDim2.new(0, 280, 0, 25), function()
-    local filesList = "Файлы в workspace:\n"
-    local ok, list = pcall(function() return listfiles("*.txt") end)  -- текстовые
-    if ok and list then
-        for _,f in ipairs(list) do
-            filesList = filesList .. f .. "\n"
+TabPatient:AddButton({Name = "Собрать всю еду (Sandwich, Milk, Popsicle, Jelly)", Callback = function()
+    -- Ищем все ClickDetector у еды
+    for _,v in ipairs(ws:GetDescendants()) do
+        if v.Name == "Sandwich" or v.Name == "Milk" or v.Name == "Popsicle" then
+            local cd = v:FindFirstChild("ClickDetector")
+            if cd then fireClickDetector(cd) end
         end
-        local ok2, list2 = pcall(function() return listfiles("*.json") end)
-        if ok2 and list2 then
-            for _,f in ipairs(list2) do
-                filesList = filesList .. f .. "\n"
+    end
+    -- Собрать желе с конвейера
+    local jelly = findFirst("JellyHolders")
+    if jelly then
+        for _,j in ipairs(jelly:GetDescendants()) do
+            if j.Name == "Handle" and j.Parent and j.Parent.Name == "Jelly" then
+                local cd = j.Parent:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
             end
         end
-    else
-        filesList = filesList .. "Не удалось прочитать (listfiles недоступен)"
     end
-    statusLabel.Text = filesList
-end)
+end})
 
--- ================== ЛОГИКА СКАНИРОВАНИЯ ==================
-local scanCount = 0
-
-local function scanToText(inst, depth, curDepth)
-    if curDepth > depth then return "" end
-    local s = string.rep("  ", curDepth) .. "[" .. inst.ClassName .. "] " .. inst.Name
-    if propsEnabled then
-        local extra = {}
-        pcall(function()
-            if inst:IsA("BasePart") then
-                extra[#extra+1] = "Pos=" .. tostring(inst.Position)
-                extra[#extra+1] = "Size=" .. tostring(inst.Size)
-            elseif inst:IsA("Humanoid") then
-                extra[#extra+1] = "HP=" .. tostring(inst.Health)
-            end
-        end)
-        if #extra > 0 then
-            s = s .. " (" .. table.concat(extra, ", ") .. ")"
+TabPatient:AddButton({Name = "Сдать грязную посуду", Callback = function()
+    local dish = findFirst("Dish Grabber")
+    if dish then
+        local trigger = dish:FindFirstChild("Trigger")
+        if trigger then
+            fireProximityPrompt(trigger:FindFirstChild("ProximityPrompt"))
         end
     end
-    s = s .. "\n"
-    for _, child in ipairs(inst:GetChildren()) do
-        s = s .. scanToText(child, depth, curDepth+1)
-    end
-    return s
-end
+end})
 
-local function scanToJsonTable(inst, depth, curDepth)
-    if curDepth > depth then return nil end
-    local obj = {Name=inst.Name, Class=inst.ClassName}
-    if propsEnabled then
-        pcall(function()
-            if inst:IsA("BasePart") then
-                obj.Position = tostring(inst.Position)
-                obj.Size = tostring(inst.Size)
+TabPatient:AddButton({Name = "Заправить все кровати", Callback = function()
+    local beds = findFirst("Beds")
+    if beds then
+        for _,v in ipairs(beds:GetDescendants()) do
+            if v.Name == "makebed" then
+                fireProximityPrompt(v)
             end
-        end)
-    end
-    obj.Children = {}
-    for _, child in ipairs(inst:GetChildren()) do
-        local childData = scanToJsonTable(child, depth, curDepth+1)
-        if childData then table.insert(obj.Children, childData) end
-    end
-    return obj
-end
-
-local function doScan()
-    local targetName = targetBox.Text
-    local depth = tonumber(depthBox.Text) or 3
-    local root = game:FindFirstChild(targetName)
-    if not root then
-        statusLabel.Text = "Ошибка: '" .. targetName .. "' не найден"
-        return
-    end
-    
-    scanCount = scanCount + 1
-    local timestamp = os.date("%Y-%m-%d_%H-%M-%S")
-    local ext = formatEnabled and ".txt" or ".json"
-    local fileName = "scan_" .. targetName .. "_" .. timestamp .. "_№" .. scanCount .. ext
-    local data = ""
-    
-    if formatEnabled then
-        local header = "=== СКАН: " .. targetName .. " | Глубина: " .. depth .. " | " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n\n"
-        data = header .. scanToText(root, depth, 0)
-    else
-        local tbl = scanToJsonTable(root, depth, 0)
-        local ok, json = pcall(function() return game:GetService("HttpService"):JSONEncode(tbl) end)
-        if not ok then
-            statusLabel.Text = "Ошибка JSON: " .. tostring(json)
-            return
         end
-        data = json
     end
-    
-    local writeOk, writeErr = pcall(function() writefile(fileName, data) end)
-    if writeOk then
-        statusLabel.Text = "✅ Сохранено: " .. fileName .. "\nПуть: workspace/" .. fileName
-    else
-        statusLabel.Text = "❌ Ошибка записи: " .. tostring(writeErr)
+end})
+
+TabPatient:AddButton({Name = "Помыться (все души)", Callback = function()
+    local showers = findFirst("Showers")
+    if showers then
+        for _,v in ipairs(showers:GetDescendants()) do
+            if v.Name == "ShowerHead" then
+                local pp = v:FindFirstChild("ProximityPrompt") or v:FindFirstChild("ClickDetector")
+                if pp then fireClickDetector(pp) end
+            end
+        end
     end
-end
+end})
 
-scanButton.MouseButton1Click:Connect(doScan)
-scanButton.TouchTap:Connect(doScan)
+TabPatient:AddButton({Name = "Сыграть на пианино (все ноты)", Callback = function()
+    local piano = findFirst("Piano")
+    if piano then
+        for _,key in ipairs(piano:GetDescendants()) do
+            if key.Name == "PianoKey" then
+                local cd = key:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
 
--- Кнопка закрытия (крестик)
-local closeButton = Instance.new("TextButton", mainFrame)
-closeButton.Text = "X"
-closeButton.Size = UDim2.new(0, 20, 0, 20)
-closeButton.Position = UDim2.new(1, -25, 0, 0)
-closeButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-closeButton.TextColor3 = Color3.new(1,1,1)
-closeButton.Font = Enum.Font.SourceSansBold
-closeButton.TextSize = 14
-closeButton.BorderSizePixel = 0
-closeButton.MouseButton1Click:Connect(function() gui:Destroy() end)
-closeButton.TouchTap:Connect(function() gui:Destroy() end)
+TabPatient:AddButton({Name = "Взять тедди/мел/игрушки", Callback = function()
+    for _,v in ipairs(ws:GetDescendants()) do
+        if v.Name == "teddi" or v.Name == "Chalk" or v.Name == "Bouncy" or v.Name == "Super Snatch" then
+            local cd = v:FindFirstChild("ClickDetector")
+            if cd then fireClickDetector(cd) end
+        end
+    end
+end})
+
+-- =================== УЧЁНЫЙ ===================
+TabScientist:AddLabel("🔬 Управление капсулами и вирусами")
+
+TabScientist:AddButton({Name = "Занять любую свободную капсулу", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "ClaimButton" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Начать эксперимент (BEGIN)", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "BEGINBUTTON" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Отправить пациента назад (SendBack)", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "SendBack" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Сжечь пациента (Burn)", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "Burn" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Вкл/выкл свет в капсуле", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "LightButton" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Открыть/закрыть окно капсулы", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "WindowButton" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Изменить цвет лазера (Red/Green/Blue)", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "Red" or v.Name == "Green" or v.Name == "Blue" then
+                local cd = v:FindFirstChild("ClickDetector")
+                if cd then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Изменить интенсивность лазера (Left/Right)", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then
+        for _,v in ipairs(caps:GetDescendants()) do
+            if v.Name == "Left" or v.Name == "Right" then
+                local cd = v:FindFirstChild("ClickDetector") or v:FindFirstChild("ImageButton")
+                if cd and cd:IsA("ClickDetector") then fireClickDetector(cd) end
+            end
+        end
+    end
+end})
+
+TabScientist:AddLabel("🦠 Вирусы (применить на пациента)")
+TabScientist:AddButton({Name = "Дать вирус: Warts", Callback = function()
+    local virus = findFirst("VirusFolder")
+    if virus then
+        local warts = virus:FindFirstChild("Warts")
+        if warts and warts:IsA("Script") then
+            -- попытка выполнить скрипт на клиенте
+            local clone = warts:Clone()
+            clone.Parent = plr.Character
+            clone.Disabled = false
+        end
+    end
+end})
+TabScientist:AddButton({Name = "Дать вирус: Explode", Callback = function()
+    local virus = findFirst("VirusFolder")
+    if virus then
+        local explode = virus:FindFirstChild("Explode")
+        if explode and explode:IsA("Script") then
+            local clone = explode:Clone()
+            clone.Parent = plr.Character
+            clone.Disabled = false
+        end
+    end
+end})
+TabScientist:AddButton({Name = "Дать вирус: Burn", Callback = function()
+    local virus = findFirst("VirusFolder")
+    if virus then
+        local burn = virus:FindFirstChild("Burn")
+        if burn and burn:IsA("Script") then
+            local clone = burn:Clone()
+            clone.Parent = plr.Character
+            clone.Disabled = false
+        end
+    end
+end})
+TabScientist:AddButton({Name = "Дать вирус: RemoveLeftArm", Callback = function()
+    local virus = findFirst("VirusFolder")
+    if virus then
+        local rm = virus:FindFirstChild("RemoveLeftArm")
+        if rm and rm:IsA("Script") then
+            local clone = rm:Clone()
+            clone.Parent = plr.Character
+            clone.Disabled = false
+        end
+    end
+end})
+TabScientist:AddButton({Name = "Дать вирус: Fairy (частицы)", Callback = function()
+    local virus = findFirst("VirusFolder")
+    if virus then
+        local fairy = virus:FindFirstChild("Fairy")
+        if fairy and fairy:IsA("Script") then
+            local clone = fairy:Clone()
+            clone.Parent = plr.Character
+            clone.Disabled = false
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Стать учёным (пропустить очередь)", Callback = function()
+    local btn = findFirst("BecomeScientistButton")
+    if btn then
+        local skip = btn:FindFirstChild("SkipQueueButton")
+        if skip then
+            fireClickDetector(skip:FindFirstChild("ClickDetector"))
+        end
+    end
+end})
+
+TabScientist:AddButton({Name = "Купить VIP учёного (без геймпасса)", Callback = function()
+    local vip = findFirst("VIPScientistGamepass")
+    if vip then
+        local buy = vip:FindFirstChild("BuyGamepass")
+        if buy then
+            fireClickDetector(buy:FindFirstChild("ClickDetector"))
+        end
+    end
+end})
+
+-- =================== ДЛЯ ВСЕХ ===================
+TabAny:AddLabel("🛡️ Безопасность / Персонаж")
+TabAny:AddToggle({Name = "Бессмертие (Godmode)", Default = false, Callback = function(val)
+    if val then
+        while val do
+            if plr.Character and plr.Character:FindFirstChild("Humanoid") then
+                plr.Character.Humanoid.Health = 100
+                plr.Character.Humanoid.MaxHealth = 100
+            end
+            task.wait(0.5)
+        end
+    end
+end})
+
+TabAny:AddButton({Name = "Восстановить здоровье", Callback = function()
+    if plr.Character and plr.Character:FindFirstChild("Humanoid") then
+        plr.Character.Humanoid.Health = plr.Character.Humanoid.MaxHealth
+    end
+end})
+
+TabAny:AddButton({Name = "Очистить вирусы с себя", Callback = function()
+    local char = plr.Character
+    if not char then return end
+    -- Удаляем все скрипты вирусов из персонажа
+    for _,v in ipairs(char:GetDescendants()) do
+        if v.Name == "Warts" or v.Name == "Skai" or v.Name == "Fidgeting" or v.Name == "GiveFace" then
+            v:Destroy()
+        end
+    end
+end})
+
+TabAny:AddLabel("🔥 Аварийные кнопки")
+TabAny:AddButton({Name = "Пожарная тревога (DaycareDoor)", Callback = function()
+    local door = findFirst("DaycareDoor")
+    if door then
+        local trigger = door:FindFirstChild("TriggerDoor")
+        if trigger then
+            fireProximityPrompt(trigger:FindFirstChild("ProximityPrompt"))
+        end
+    end
+end})
+
+TabAny:AddButton({Name = "Ускорить все конвейеры", Callback = function()
+    for _,conv in ipairs(ws:GetDescendants()) do
+        if conv.Name == "Conveyor" then
+            local speed = conv:FindFirstChild("Speed")
+            if speed and speed:IsA("NumberValue") then
+                speed.Value = 50
+            end
+        end
+    end
+end})
+
+TabAny:AddButton({Name = "Остановить конвейеры", Callback = function()
+    for _,conv in ipairs(ws:GetDescendants()) do
+        if conv.Name == "Conveyor" then
+            local speed = conv:FindFirstChild("Speed")
+            if speed and speed:IsA("NumberValue") then
+                speed.Value = 0
+            end
+        end
+    end
+end})
+
+-- =================== ТЕЛЕПОРТЫ ===================
+TabTeleports:AddLabel("🚀 Быстрые телепорты")
+TabTeleports:AddButton({Name = "В столовую", Callback = function()
+    local target = findFirst("Model") -- столы
+    if target then plr.Character:MoveTo(target:GetPivot().Position) end
+end})
+TabTeleports:AddButton({Name = "К душевым", Callback = function()
+    local showers = findFirst("Showers")
+    if showers then plr.Character:MoveTo(showers:GetPivot().Position) end
+end})
+TabTeleports:AddButton({Name = "К капсулам", Callback = function()
+    local caps = findFirst("Capsules")
+    if caps then plr.Character:MoveTo(caps:GetPivot().Position) end
+end})
+TabTeleports:AddButton({Name = "К магазину учёного", Callback = function()
+    local shop = findFirst("ShopSystem")
+    if shop then plr.Character:MoveTo(shop:GetPivot().Position) end
+end})
+TabTeleports:AddButton({Name = "К доске рисования", Callback = function()
+    local draw = findFirst("Drawing")
+    if draw then plr.Character:MoveTo(draw:GetPivot().Position) end
+end})
+TabTeleports:AddButton({Name = "К выходу (DaycareDoor)", Callback = function()
+    local door = findFirst("DaycareDoor")
+    if door then plr.Character:MoveTo(door:GetPivot().Position) end
+end})
+
+-- =================== ПРОЧЕЕ ===================
+TabMisc:AddButton({Name = "Нарисовать радугу на доске", Callback = function()
+    local paint = findFirst("paint") -- RemoteEvent
+    if paint and paint:IsA("RemoteEvent") then
+        paint:FireServer(unpack({["Color"] = Color3.new(1,0,0)}))
+        task.wait(0.1)
+        paint:FireServer(unpack({["Color"] = Color3.new(0,1,0)}))
+    end
+end})
+
+TabMisc:AddButton({Name = "Вызвать событие CelebrationBoardGui", Callback = function()
+    local gui = findFirst("CelebrationBoardGui")
+    if gui then
+        local trigger = gui:FindFirstChild("trigger")
+        if trigger and trigger:IsA("RemoteEvent") then
+            trigger:FireServer("Test exploit")
+        end
+    end
+end})
+
+TabMisc:AddButton({Name = "Включить все лампы (FullBright)", Callback = function()
+    for _,light in ipairs(ws:GetDescendants()) do
+        if light:IsA("SpotLight") or light:IsA("SurfaceLight") or light:IsA("PointLight") then
+            light.Enabled = true
+            light.Brightness = 10
+        end
+    end
+end})
+
+TabMisc:AddButton({Name = "Собрать все монеты (Coin?)", Callback = function()
+    -- Монеты не нашёл, но возможно есть деньги
+    -- Ищем любой NumberValue с названием "Money" или "Coins"
+    for _,v in ipairs(plr:GetDescendants()) do
+        if v.Name == "Money" or v.Name == "Coins" and v:IsA("NumberValue") then
+            v.Value = 99999
+        end
+    end
+end})
+
+TabMisc:AddButton({Name = "Дать себе Test Gamepass (Attendance)", Callback = function()
+    local att = findFirst("GameTesterAttendance")
+    if att then
+        local btn = att:FindFirstChild("RedButton")
+        if btn then
+            fireClickDetector(btn:FindFirstChild("ClickDetector"))
+        end
+    end
+end})
+
+TabMisc:AddButton({Name = "Повернуть TurnyThingy", Callback = function()
+    local turny = findFirst("TurnyThingy")
+    if turny then
+        local hing = turny:FindFirstChild("HingeConstraint")
+        if hing then
+            hing.CurrentAngle = hing.CurrentAngle + math.rad(180)
+        end
+    end
+end})
+
+-- Инициализация
+OrionLib:Init()
