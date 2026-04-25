@@ -1,259 +1,221 @@
 --[[
-   ТРАКТОР-ДРИФТ (МОБИЛЬНАЯ ВЕРСИЯ)
-   Управление: экранные кнопки (WASD) или клавиши.
-   При движении и повороте трактор скользит боком,
-   из колёс идёт дым, звучит занос.
+    🔍 СУПЕРМЕГА-СКАННЕР ДЛЯ DELTA EXECUTOR
+    Использует библиотеку Orion UI
+    Сохраняет каждый скан в отдельный файл с уникальным именем
 ]]--
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
+-- Загрузка Orion (проверенная ссылка)
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Orion/main/source"))()
+local Window = OrionLib:MakeWindow({Name = "Explorer Scanner V3", HidePremium = false, SaveConfig = false, ConfigFolder = "ScannerConfig"})
 
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
+-- Переменные
+local scanCounter = 0
+local defaultFolder = "Scans" -- папка для сохранения
 
--- Конфигурация
-local DRIFT_FACTOR = 0.7
-local SPEED = 40
-local TURN_SPEED = 3.5
-local DRIFT_SOUND_ID = "rbxassetid://9120386436"  -- замените при желании
+-- ==================== ВКЛАДКИ ====================
+local MainTab = Window:MakeTab({Name = "Сканер", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+local SettingsTab = Window:MakeTab({Name = "Настройки", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+local OutputTab = Window:MakeTab({Name = "Вывод", Icon = "rbxassetid://4483345998", PremiumOnly = false})
 
--- Переменные состояния ввода
-local input = { W = false, A = false, S = false, D = false }
-local driftSound = nil
-local wheelSmokes = {}
+-- ==================== НАСТРОЙКИ ====================
+local scanTarget = "Workspace"
+local maxDepth = 3 -- глубина рекурсии
+local includeProperties = true
+local fileFormat = "txt" -- txt/json
 
--- ---- ЭКРАННЫЕ КНОПКИ ДЛЯ ТЕЛЕФОНА ----
-local function createMobileButtons()
-	local screenGui = Instance.new("ScreenGui")
-	screenGui.Name = "TractorControls"
-	screenGui.Parent = player:WaitForChild("PlayerGui")
-	screenGui.ResetOnSpawn = false  -- чтобы не пропадало при респавне
+SettingsTab:AddDropdown({
+    Name = "Цель сканирования",
+    Default = "Workspace",
+    Options = {"Workspace", "Players", "Lighting", "ReplicatedStorage", "ServerStorage", "StarterGui"},
+    Callback = function(val) scanTarget = val end
+})
 
-	local btnSize = UDim2.new(0, 70, 0, 70)
-	local cornerRadius = UDim.new(0, 12)
+SettingsTab:AddSlider({
+    Name = "Макс. глубина",
+    Min = 1,
+    Max = 10,
+    Default = 3,
+    Color = Color3.fromRGB(0, 170, 255),
+    Increment = 1,
+    ValueName = "уровней",
+    Callback = function(val) maxDepth = val end
+})
 
-	local function makeButton(name, position, text, inputKey)
-		local btn = Instance.new("TextButton")
-		btn.Name = name
-		btn.Size = btnSize
-		btn.Position = position
-		btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-		btn.BackgroundTransparency = 0.6
-		btn.Text = text
-		btn.TextColor3 = Color3.new(0, 0, 0)
-		btn.Font = Enum.Font.SourceSansBold
-		btn.TextSize = 24
-		btn.BorderSizePixel = 0
-		btn.AutoButtonColor = false
-		-- скругление
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = cornerRadius
-		corner.Parent = btn
+SettingsTab:AddToggle({
+    Name = "Добавлять свойства объектов",
+    Default = true,
+    Callback = function(val) includeProperties = val end
+})
 
-		-- События касания
-		btn.InputBegan:Connect(function(inputObj)
-			if inputObj.UserInputType == Enum.UserInputType.Touch or
-			   inputObj.UserInputType == Enum.UserInputType.MouseButton1 then
-				input[inputKey] = true
-			end
-		end)
-		btn.InputEnded:Connect(function(inputObj)
-			if inputObj.UserInputType == Enum.UserInputType.Touch or
-			   inputObj.UserInputType == Enum.UserInputType.MouseButton1 then
-				input[inputKey] = false
-			end
-		end)
-		btn.Parent = screenGui
-		return btn
-	end
+SettingsTab:AddDropdown({
+    Name = "Формат файла",
+    Default = "txt",
+    Options = {"txt", "json"},
+    Callback = function(val) fileFormat = val end
+})
 
-	-- Расположим кнопки по углам экрана (как на мобильных гонках)
-	makeButton("W", UDim2.new(0, 40, 0.75, 0), "▲", "W")   -- вперёд
-	makeButton("S", UDim2.new(0, 40, 0.85, 0), "▼", "S")   -- назад
-	makeButton("A", UDim2.new(0, 10, 0.80, 0), "◀", "A")   -- влево
-	makeButton("D", UDim2.new(0, 140, 0.80, 0), "▶", "D")  -- вправо
+SettingsTab:AddTextbox({
+    Name = "Папка сохранения",
+    Default = defaultFolder,
+    TextDisappear = false,
+    Callback = function(val) defaultFolder = val end
+})
+
+-- ==================== ЛОГ ВЫВОДА ====================
+local OutputLog = OutputTab:AddParagraph("Лог", "Ожидание сканирования...")
+
+local function addLog(text)
+    local current = OutputLog:GetText()
+    OutputLog:SetText(current .. "\n" .. text)
 end
 
--- ---- КЛАВИАТУРНЫЙ ВВОД (ПК) ----
-local function onInputBegan(key, processed)
-	if processed then return end
-	local k = key.KeyCode.Name
-	if input[k] ~= nil then input[k] = true end
-end
-local function onInputEnded(key, processed)
-	if processed then return end
-	local k = key.KeyCode.Name
-	if input[k] ~= nil then input[k] = false end
-end
-UserInputService.InputBegan:Connect(onInputBegan)
-UserInputService.InputEnded:Connect(onInputEnded)
-
--- ---- ПОСТРОЕНИЕ ТРАКТОРА И ЛОГИКА ДВИЖЕНИЯ ----
-local function setupCharacter(newChar)
-	character = newChar
-	repeat task.wait() until character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid")
-	local humanoid = character.Humanoid
-	local rootPart = character.HumanoidRootPart
-
-	-- Прячем родное тело
-	for _, part in ipairs(character:GetDescendants()) do
-		if part:IsA("BasePart") and part ~= rootPart then
-			part.Transparency = 1
-		end
-	end
-
-	humanoid.AutoRotate = false
-	humanoid.PlatformStand = true
-
-	-- Модель трактора
-	local tractor = Instance.new("Model")
-	tractor.Name = "Tractor"
-	tractor.Parent = character
-
-	local body = Instance.new("Part")
-	body.Size = Vector3.new(5, 2, 8)
-	body.Color = Color3.fromRGB(50, 130, 50)
-	body.Material = Enum.Material.Metal
-	body.Anchored = false
-	body.CanCollide = false
-	body.Parent = tractor
-
-	local cabin = Instance.new("Part")
-	cabin.Size = Vector3.new(3, 2.5, 3)
-	cabin.Color = Color3.fromRGB(30, 100, 30)
-	cabin.Material = Enum.Material.Glass
-	cabin.Anchored = false
-	cabin.CanCollide = false
-	cabin.Parent = tractor
-	local cabinWeld = Instance.new("Weld")
-	cabinWeld.Part0 = body
-	cabinWeld.Part1 = cabin
-	cabinWeld.C0 = CFrame.new(0, 2.25, -1)
-	cabinWeld.Parent = cabin
-
-	local pipe = Instance.new("Part")
-	pipe.Size = Vector3.new(0.5, 3, 0.5)
-	pipe.Color = Color3.fromRGB(40, 40, 40)
-	pipe.Material = Enum.Material.Metal
-	pipe.Anchored = false
-	pipe.CanCollide = false
-	pipe.Parent = tractor
-	local pipeWeld = Instance.new("Weld")
-	pipeWeld.Part0 = body
-	pipeWeld.Part1 = pipe
-	pipeWeld.C0 = CFrame.new(1.5, 2, -2.5)
-	pipeWeld.Parent = pipe
-
-	local function createWheel(name, position, size)
-		local wheel = Instance.new("Part")
-		wheel.Name = name
-		wheel.Shape = Enum.PartType.Cylinder
-		wheel.Size = size or Vector3.new(1.5, 1, 1.5)
-		wheel.Color = Color3.fromRGB(20, 20, 20)
-		wheel.Material = Enum.Material.Metal
-		wheel.Anchored = false
-		wheel.CanCollide = false
-		wheel.Parent = tractor
-		local weld = Instance.new("Weld")
-		weld.Part0 = body
-		weld.Part1 = wheel
-		weld.C0 = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
-		weld.Parent = wheel
-		local smoke = Instance.new("ParticleEmitter")
-		smoke.Texture = "rbxassetid://1234567890"
-		smoke.Color = ColorSequence.new(Color3.fromRGB(200, 200, 200))
-		smoke.Size = NumberSequence.new(0.5, 1)
-		smoke.Lifetime = NumberRange.new(0.5, 1.5)
-		smoke.Rate = 0
-		smoke.Speed = NumberRange.new(2, 5)
-		smoke.Enabled = false
-		smoke.Parent = wheel
-		wheelSmokes[wheel] = smoke
-		return wheel
-	end
-
-	createWheel("FrontLeft",  Vector3.new(-2.5, -1, 3),    Vector3.new(1.5, 1.2, 1.5))
-	createWheel("FrontRight", Vector3.new(2.5, -1, 3),     Vector3.new(1.5, 1.2, 1.5))
-	createWheel("RearLeft",   Vector3.new(-2.5, -1, -3),   Vector3.new(1.5, 1.2, 1.5))
-	createWheel("RearRight",  Vector3.new(2.5, -1, -3),    Vector3.new(1.5, 1.2, 1.5))
-
-	local rootWeld = Instance.new("Weld")
-	rootWeld.Part0 = rootPart
-	rootWeld.Part1 = body
-	rootWeld.C0 = CFrame.new(0, -1.5, 0)
-	rootWeld.Parent = body
-
-	driftSound = Instance.new("Sound")
-	driftSound.SoundId = DRIFT_SOUND_ID
-	driftSound.Looped = true
-	driftSound.Volume = 0.5
-	driftSound.Parent = body
-	driftSound:Stop()
-
-	-- Основной цикл
-	local heartbeatConn
-	heartbeatConn = RunService.Heartbeat:Connect(function(dt)
-		if not character or not character.Parent or not rootPart or not humanoid then
-			heartbeatConn:Disconnect()
-			return
-		end
-
-		local forward = rootPart.CFrame.LookVector
-		local right = rootPart.CFrame.RightVector
-
-		local moveInput = 0
-		if input.W then moveInput += 1 end
-		if input.S then moveInput -= 1 end
-
-		local turnInput = 0
-		if input.D then turnInput -= 1 end
-		if input.A then turnInput += 1 end
-
-		local targetSpeed = moveInput * SPEED
-		local turnRate = turnInput * TURN_SPEED
-
-		local drift = (math.abs(moveInput) > 0.1) and (math.abs(turnInput) > 0.1)
-		local lateralSlide = 0
-		if drift then
-			lateralSlide = turnInput * math.abs(targetSpeed) * DRIFT_FACTOR
-		end
-
-		local desiredVelocity = forward * targetSpeed + right * lateralSlide
-		desiredVelocity = Vector3.new(desiredVelocity.X, rootPart.AssemblyLinearVelocity.Y, desiredVelocity.Z)
-		rootPart.AssemblyLinearVelocity = desiredVelocity
-		rootPart.AssemblyAngularVelocity = Vector3.new(0, turnRate, 0)
-
-		if drift then
-			for _, smoke in pairs(wheelSmokes) do
-				if not smoke.Enabled then smoke.Enabled = true end
-				smoke.Rate = 30
-			end
-			if not driftSound.IsPlaying then driftSound:Play() end
-		else
-			for _, smoke in pairs(wheelSmokes) do
-				if smoke.Enabled then
-					smoke.Enabled = false
-					smoke.Rate = 0
-				end
-			end
-			if driftSound.IsPlaying then driftSound:Stop() end
-		end
-	end)
-
-	character.Destroying:Connect(function()
-		heartbeatConn:Disconnect()
-		if driftSound then driftSound:Stop() end
-		wheelSmokes = {}
-	end)
+-- ==================== СКАНЕР ====================
+-- Функция рекурсивного обхода
+local function scanInstance(instance, depth, currentDepth)
+    if currentDepth > depth then return "" end
+    local entry = ""
+    local indent = string.rep("  ", currentDepth)
+    
+    -- Название и класс
+    entry = entry .. indent .. "[" .. instance.ClassName .. "] " .. instance.Name
+    
+    -- Свойства, если включены и объект не слишком тяжёлый
+    if includeProperties then
+        local props = {}
+        local success, result = pcall(function()
+            if instance:IsA("BasePart") then
+                table.insert(props, "Position = " .. tostring(instance.Position))
+                table.insert(props, "Size = " .. tostring(instance.Size))
+                table.insert(props, "Anchored = " .. tostring(instance.Anchored))
+            elseif instance:IsA("Model") then
+                table.insert(props, "PrimaryPart = " .. tostring(instance.PrimaryPart))
+            elseif instance:IsA("Humanoid") then
+                table.insert(props, "Health = " .. tostring(instance.Health))
+            end
+            -- общие свойства
+            if #props > 0 then
+                entry = entry .. " (" .. table.concat(props, ", ") .. ")"
+            end
+        end)
+        if not success then
+            entry = entry .. " [Error reading properties]"
+        end
+    end
+    
+    entry = entry .. "\n"
+    
+    -- Обходим потомков
+    local children = instance:GetChildren()
+    for _, child in ipairs(children) do
+        entry = entry .. scanInstance(child, depth, currentDepth + 1)
+    end
+    
+    return entry
 end
 
--- Создаём кнопки один раз
-createMobileButtons()
-
--- Привязка к персонажу
-if player.Character then
-	setupCharacter(player.Character)
+-- Функция сбора всех данных
+local function performScan(targetName, depth)
+    local root = game:FindFirstChild(targetName)
+    if not root then
+        return nil, "Цель не найдена: " .. targetName
+    end
+    
+    local result = "=== СКАНИРОВАНИЕ: " .. targetName .. " ===\n"
+    result = result .. "Дата: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n"
+    result = result .. "Глубина: " .. depth .. "\n\n"
+    result = result .. scanInstance(root, depth, 0)
+    return result
 end
-player.CharacterAdded:Connect(setupCharacter)
+
+-- Преобразование в JSON (простой способ, без библиотеки)
+local function toJsonTable(instance, depth, currentDepth)
+    if currentDepth > depth then return nil end
+    local obj = {Name = instance.Name, Class = instance.ClassName}
+    if includeProperties then
+        if instance:IsA("BasePart") then
+            obj.Position = tostring(instance.Position)
+            obj.Size = tostring(instance.Size)
+        end
+    end
+    obj.Children = {}
+    for _, child in ipairs(instance:GetChildren()) do
+        local childData = toJsonTable(child, depth, currentDepth + 1)
+        if childData then
+            table.insert(obj.Children, childData)
+        end
+    end
+    return obj
+end
+
+-- Основная кнопка сканирования
+MainTab:AddButton({
+    Name = "Сканировать сейчас!",
+    Callback = function()
+        local target = scanTarget
+        local depth = maxDepth
+        
+        addLog("▶ Запуск сканирования цели: " .. target .. " с глубиной " .. depth)
+        scanCounter = scanCounter + 1
+        
+        -- Генерация имени файла
+        local timestamp = os.date("%Y-%m-%d_%H-%M-%S")
+        local extension = (fileFormat == "json") and ".json" or ".txt"
+        local fileName = "Scan_" .. target .. "_" .. timestamp .. "_" .. scanCounter .. extension
+        local filePath = defaultFolder .. "/" .. fileName
+        
+        -- Запуск в корутине, чтобы не вис интерфейс
+        task.spawn(function()
+            local success, data_or_err
+            
+            if fileFormat == "json" then
+                local root = game:FindFirstChild(target)
+                if root then
+                    local jsonTable = toJsonTable(root, depth, 0)
+                    if jsonTable then
+                        local jsonStr = game:GetService("HttpService"):JSONEncode(jsonTable)
+                        data_or_err = jsonStr
+                        success = true
+                    else
+                        success = false
+                        data_or_err = "Ошибка при преобразовании в JSON"
+                    end
+                else
+                    success = false
+                    data_or_err = "Цель не найдена"
+                end
+            else
+                success, data_or_err = pcall(performScan, target, depth)
+                if not success then
+                    data_or_err = "Ошибка сканирования: " .. tostring(data_or_err)
+                end
+            end
+            
+            if success then
+                -- Сохранение
+                local writeSuccess = pcall(function()
+                    writefile(filePath, data_or_err)
+                end)
+                if writeSuccess then
+                    addLog("✅ Файл сохранён: " .. filePath)
+                else
+                    addLog("❌ Не удалось записать файл (возможно нет прав)")
+                end
+            else
+                addLog("❌ Скан провален: " .. data_or_err)
+            end
+        end)
+    end
+})
+
+-- Кнопка просмотра последнего скана (читает файл, но проще показать путь)
+MainTab:AddButton({
+    Name = "Открыть папку сканов",
+    Callback = function()
+        -- В Delta нет прямой команды открыть папку, просто выведем путь
+        addLog("📁 Все сканы в папке: " .. defaultFolder .. " (используйте файловый менеджер)")
+    end
+})
+
+-- Инициализация
+OrionLib:Init()
+addLog("Сканер готов. Выберите настройки и нажмите 'Сканировать сейчас!'")
