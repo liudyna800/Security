@@ -1,616 +1,713 @@
 --[[
-    FreeBuilder v1.1
-    Piggy Build Mode — свободное перемещение/вращение/масштаб
-    Без сетки | Мобилка + ПК | Стабильный commit на сервер
-    
-    ИСПРАВЛЕНО:
-    v1.1: updatePanels перемещена выше selectBlock
-          getBlockModel — строгая проверка только workspace.BuildModel
-          CFrame+Vector3 вместо CFrame-Vector3 (невалидно в Lua)
-          Throttle 0.15с на долгое нажатие + commitMove только при отпускании
-          character берётся динамически в raycast
-          WaitForChild для Functions
-          scaleBlock — CommitResize без локального preview (сервер authoritative)
+╔══════════════════════════════════════════════════════╗
+║         FreeBuilder v2.1  —  Piggy Build Mode        ║
+║  Нативные 3D хендлы | Мобилка + ПК | Stable commit  ║
+╚══════════════════════════════════════════════════════╝
+  ИСПРАВЛЕНО v2.1:
+  • scaleConn — отдельная переменная, disconnect в clearHandles
+  • Vector3 .Abs() → math.abs() по компонентам
+  • CFrame - Vector3 → .Rotation (валидное свойство)
+  • ToEulerAnglesXYZ вызывается один раз, rx,ry,rz сохраняются
+  • InputEnded для scale — один глобальный листенер
+  • SphereHandleAdornment.CFrame — правильные компоненты
+  • Handles drag: startCF.Rotation сохраняет поворот блока
 --]]
 
-local Players          = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
+-- ═══════════════════════════════════════
+-- СЕРВИСЫ
+-- ═══════════════════════════════════════
+local Players           = game:GetService("Players")
+local UserInputService  = game:GetService("UserInputService")
+local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- === REMOTE FUNCTIONS ===
--- Functions — top-level папка в ReplicatedStorage (подтверждено сканом)
-local Functions = ReplicatedStorage:WaitForChild("Functions", 10)
-if not Functions then
-    -- Fallback: искать в workspace
-    Functions = workspace:FindFirstChild("Functions")
-end
-
-local rfCommitMove   = Functions and Functions:WaitForChild("CommitMove", 5)
+-- ═══════════════════════════════════════
+-- REMOTE FUNCTIONS
+-- ═══════════════════════════════════════
+local Functions      = ReplicatedStorage:WaitForChild("Functions", 10)
+local rfCommitMove   = Functions and Functions:WaitForChild("CommitMove",   5)
 local rfCommitResize = Functions and Functions:WaitForChild("CommitResize", 5)
+print("[FB2] CommitMove:",   rfCommitMove   and "OK" or "NOT FOUND")
+print("[FB2] CommitResize:", rfCommitResize and "OK" or "NOT FOUND")
 
-print("[FreeBuilder] CommitMove RF:  ", rfCommitMove   and "OK" or "НЕ НАЙДЕН")
-print("[FreeBuilder] CommitResize RF:", rfCommitResize and "OK" or "НЕ НАЙДЕН")
+local BUILD_FOLDER = workspace:WaitForChild("BuildModel", 10)
 
--- workspace.BuildModel — Folder где лежат размещённые блоки
-local BUILD_MODEL_FOLDER = workspace:WaitForChild("BuildModel", 10)
+-- ═══════════════════════════════════════
+-- СОСТОЯНИЕ
+-- ═══════════════════════════════════════
+local sel        = nil      -- выбранная Model
+local mode       = "select"
+local dragActive = false
 
--- === СОСТОЯНИЕ ===
-local selectedBlock = nil
-local activeMode    = "move"  -- "move" | "rotate" | "scale"
+-- хендлы
+local hMove      = nil
+local hRotate    = nil
+local hScaleList = {}       -- SphereHandleAdornment[]
+local scaleConn  = nil      -- БАГ1 FIX: отдельная переменная
+local inputEndedConn = nil  -- БАГ5 FIX: один листенер InputEnded
+local selBox     = nil
 
--- === GUI ===
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name             = "FreeBuilder"
-screenGui.ResetOnSpawn     = false
-screenGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
-screenGui.DisplayOrder     = 100
-screenGui.Parent           = player.PlayerGui
+-- ═══════════════════════════════════════
+-- ЦВЕТА
+-- ═══════════════════════════════════════
+local C = {
+    red    = Color3.fromRGB(218, 75,  75),
+    dark   = Color3.fromRGB(30,  30,  30),
+    white  = Color3.fromRGB(255, 255, 255),
+    yellow = Color3.fromRGB(255, 210, 50),
+    blue   = Color3.fromRGB(70,  130, 220),
+    green  = Color3.fromRGB(60,  180, 80),
+    orange = Color3.fromRGB(255, 150, 40),
+    panel  = Color3.fromRGB(220, 85,  85),
+}
 
--- Цвета в стиле Piggy
-local C_RED    = Color3.fromRGB(218, 80, 80)
-local C_DARK   = Color3.fromRGB(35, 35, 35)
-local C_WHITE  = Color3.fromRGB(255, 255, 255)
-local C_YELLOW = Color3.fromRGB(255, 210, 50)
-local C_GREEN  = Color3.fromRGB(60, 180, 80)
-local C_BLUE   = Color3.fromRGB(60, 100, 210)
+local modeColor = {
+    select = Color3.fromRGB(110, 110, 110),
+    move   = Color3.fromRGB(70,  130, 220),
+    rotate = Color3.fromRGB(60,  190, 80),
+    scale  = Color3.fromRGB(255, 150, 40),
+}
 
-local function addCorner(parent, radius)
+-- ═══════════════════════════════════════
+-- УТИЛИТЫ GUI
+-- ═══════════════════════════════════════
+local function corner(p, r)
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius or 12)
-    c.Parent = parent
-    return c
+    c.CornerRadius = UDim.new(0, r or 12)
+    c.Parent = p
 end
 
-local function addGradient(parent, c0, c1, rot)
+local function gradient(p, c0, c1, rot)
     local g = Instance.new("UIGradient")
-    g.Color = ColorSequence.new(c0, c1)
+    g.Color    = ColorSequence.new(c0, c1)
     g.Rotation = rot or 90
-    g.Parent = parent
-    return g
+    g.Parent   = p
 end
 
--- ── СТРОКА СТАТУСА (над панелью) ──────────────────────────────────
-local statusBar = Instance.new("Frame")
-statusBar.Size              = UDim2.new(0, 224, 0, 24)
-statusBar.Position          = UDim2.new(1, -232, 1, -108)
-statusBar.BackgroundColor3  = C_DARK
-statusBar.BackgroundTransparency = 0.2
-statusBar.BorderSizePixel   = 0
-statusBar.Parent            = screenGui
-addCorner(statusBar, 8)
-
-local statusLabel = Instance.new("TextLabel")
-statusLabel.Size             = UDim2.new(1, -8, 1, 0)
-statusLabel.Position         = UDim2.new(0, 4, 0, 0)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Text             = "🔧 FreeBuilder — нажми на блок"
-statusLabel.TextSize         = 11
-statusLabel.Font             = Enum.Font.Gotham
-statusLabel.TextColor3       = C_WHITE
-statusLabel.TextXAlignment   = Enum.TextXAlignment.Left
-statusLabel.TextTruncate     = Enum.TextTruncate.AtEnd
-statusLabel.Parent           = statusBar
-
--- ── ГЛАВНАЯ ПАНЕЛЬ (внизу справа) ─────────────────────────────────
-local mainPanel = Instance.new("Frame")
-mainPanel.Size             = UDim2.new(0, 224, 0, 60)
-mainPanel.Position         = UDim2.new(1, -232, 1, -78)
-mainPanel.BackgroundColor3 = C_RED
-mainPanel.BorderSizePixel  = 0
-mainPanel.Parent           = screenGui
-addCorner(mainPanel, 14)
-addGradient(mainPanel,
-    Color3.fromRGB(235, 95, 95),
-    Color3.fromRGB(175, 45, 45), 90)
-
-local mainLayout = Instance.new("UIListLayout")
-mainLayout.FillDirection         = Enum.FillDirection.Horizontal
-mainLayout.HorizontalAlignment   = Enum.HorizontalAlignment.Center
-mainLayout.VerticalAlignment     = Enum.VerticalAlignment.Center
-mainLayout.Padding               = UDim.new(0, 6)
-mainLayout.Parent                = mainPanel
-
-local mainPad = Instance.new("UIPadding")
-mainPad.PaddingLeft  = UDim.new(0, 8)
-mainPad.PaddingRight = UDim.new(0, 8)
-mainPad.Parent       = mainPanel
-
--- кнопка-фабрика для главной панели
-local function makeMainBtn(icon)
-    local btn = Instance.new("TextButton")
-    btn.Size                    = UDim2.new(0, 48, 0, 44)
-    btn.BackgroundColor3        = C_WHITE
-    btn.BackgroundTransparency  = 0.85
-    btn.BorderSizePixel         = 0
-    btn.Text                    = icon
-    btn.TextSize                = 22
-    btn.Font                    = Enum.Font.GothamBold
-    btn.TextColor3              = C_WHITE
-    btn.AutoButtonColor         = false
-    btn.Parent                  = mainPanel
-    addCorner(btn, 10)
-    return btn
+local function stroke(p, color, thick)
+    local s = Instance.new("UIStroke")
+    s.Color     = color or Color3.fromRGB(255,255,255)
+    s.Thickness = thick or 1.5
+    s.Transparency = 0.7
+    s.Parent    = p
 end
 
-local btnMove   = makeMainBtn("✥")   -- move
-local btnRotate = makeMainBtn("↻")   -- rotate
-local btnScale  = makeMainBtn("⊡")   -- scale
-local btnDesel  = makeMainBtn("✕")   -- deselect
-
--- ── ВСПОМОГАТЕЛЬНАЯ ПАНЕЛЬ (над главной, зависит от режима) ───────
-local function makeSubPanel()
-    local f = Instance.new("Frame")
-    f.Size             = UDim2.new(0, 224, 0, 58)
-    f.Position         = UDim2.new(1, -232, 1, -144)
-    f.BackgroundColor3 = C_DARK
-    f.BackgroundTransparency = 0.15
-    f.BorderSizePixel  = 0
-    f.Visible          = false
-    f.Parent           = screenGui
-    addCorner(f, 12)
-    return f
+-- ═══════════════════════════════════════
+-- УТИЛИТЫ БЛОКА
+-- ═══════════════════════════════════════
+local function getPP(model)
+    return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
 end
 
--- Move panel
-local movePanel = makeSubPanel()
-local moveGrid  = Instance.new("UIGridLayout")
-moveGrid.CellSize              = UDim2.new(0, 62, 0, 22)
-moveGrid.CellPadding           = UDim2.new(0, 4, 0, 4)
-moveGrid.HorizontalAlignment   = Enum.HorizontalAlignment.Center
-moveGrid.VerticalAlignment     = Enum.VerticalAlignment.Center
-moveGrid.Parent                = movePanel
-
-local movePad = Instance.new("UIPadding")
-movePad.PaddingLeft   = UDim.new(0, 6)
-movePad.PaddingRight  = UDim.new(0, 6)
-movePad.PaddingTop    = UDim.new(0, 6)
-movePad.PaddingBottom = UDim.new(0, 6)
-movePad.Parent        = movePanel
-
-local function makeAxisBtn(parent, txt, color)
-    local b = Instance.new("TextButton")
-    b.BackgroundColor3  = color
-    b.BorderSizePixel   = 0
-    b.Text              = txt
-    b.TextSize          = 11
-    b.Font              = Enum.Font.GothamBold
-    b.TextColor3        = C_WHITE
-    b.AutoButtonColor   = false
-    b.Parent            = parent
-    addCorner(b, 6)
-    return b
+local function getCF(model)
+    local pp = getPP(model)
+    return pp and pp.CFrame or CFrame.new()
 end
 
-local C_AX = Color3.fromRGB(200, 55, 55)
-local C_AY = Color3.fromRGB(55, 160, 65)
-local C_AZ = Color3.fromRGB(55, 90, 205)
-
-local btnMXp = makeAxisBtn(movePanel, "X+", C_AX)
-local btnMXm = makeAxisBtn(movePanel, "X−", C_AX)
-local btnMYp = makeAxisBtn(movePanel, "Y+", C_AY)
-local btnMYm = makeAxisBtn(movePanel, "Y−", C_AY)
-local btnMZp = makeAxisBtn(movePanel, "Z+", C_AZ)
-local btnMZm = makeAxisBtn(movePanel, "Z−", C_AZ)
-
--- Rotate panel
-local rotatePanel = makeSubPanel()
-local rotLayout   = Instance.new("UIListLayout")
-rotLayout.FillDirection       = Enum.FillDirection.Horizontal
-rotLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-rotLayout.VerticalAlignment   = Enum.VerticalAlignment.Center
-rotLayout.Padding             = UDim.new(0, 5)
-rotLayout.Parent              = rotatePanel
-
-local rotPad = Instance.new("UIPadding")
-rotPad.PaddingLeft  = UDim.new(0, 6)
-rotPad.PaddingRight = UDim.new(0, 6)
-rotPad.Parent       = rotatePanel
-
-local function makeRotBtn(txt, color)
-    local b = Instance.new("TextButton")
-    b.Size              = UDim2.new(0, 64, 0, 44)
-    b.BackgroundColor3  = color
-    b.BorderSizePixel   = 0
-    b.Text              = txt
-    b.TextSize          = 10
-    b.Font              = Enum.Font.GothamBold
-    b.TextColor3        = C_WHITE
-    b.AutoButtonColor   = false
-    b.Parent            = rotatePanel
-    addCorner(b, 8)
-    return b
-end
-
-local btnRX = makeRotBtn("X\n±15°", C_AX)
-local btnRY = makeRotBtn("Y\n±15°", C_AY)
-local btnRZ = makeRotBtn("Z\n±15°", C_AZ)
-
--- Scale panel
-local scalePanel = makeSubPanel()
-local scaleLayout = Instance.new("UIListLayout")
-scaleLayout.FillDirection       = Enum.FillDirection.Horizontal
-scaleLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-scaleLayout.VerticalAlignment   = Enum.VerticalAlignment.Center
-scaleLayout.Padding             = UDim.new(0, 5)
-scaleLayout.Parent              = scalePanel
-
-local scalePad = Instance.new("UIPadding")
-scalePad.PaddingLeft  = UDim.new(0, 6)
-scalePad.PaddingRight = UDim.new(0, 6)
-scalePad.Parent       = scalePanel
-
-local function makeScaleBtn(txt, color)
-    local b = Instance.new("TextButton")
-    b.Size              = UDim2.new(0, 64, 0, 44)
-    b.BackgroundColor3  = color
-    b.BorderSizePixel   = 0
-    b.Text              = txt
-    b.TextSize          = 10
-    b.Font              = Enum.Font.GothamBold
-    b.TextColor3        = C_WHITE
-    b.AutoButtonColor   = false
-    b.Parent            = scalePanel
-    addCorner(b, 8)
-    return b
-end
-
-local btnSX = makeScaleBtn("X\n±0.5", C_AX)
-local btnSY = makeScaleBtn("Y\n±0.5", C_AY)
-local btnSZ = makeScaleBtn("Z\n±0.5", C_AZ)
-
--- ── HELPER: СТАТУС ─────────────────────────────────────────────────
-local function setStatus(txt)
-    statusLabel.Text = txt
-end
-
--- ── HELPER: ПОДСВЕТКА АКТИВНОГО РЕЖИМА ────────────────────────────
-local function highlightMode(mode)
-    local map = {move = btnMove, rotate = btnRotate, scale = btnScale}
-    for m, b in pairs(map) do
-        if m == mode then
-            b.BackgroundTransparency = 0.2
-            b.TextColor3 = C_YELLOW
-        else
-            b.BackgroundTransparency = 0.85
-            b.TextColor3 = C_WHITE
-        end
-    end
-end
-
--- ── HELPER: ОБНОВИТЬ ВИДИМОСТЬ ПОДПАНЕЛЕЙ ─────────────────────────
--- ОБЪЯВЛЕНА РАНЬШЕ selectBlock чтобы не было проблем с порядком
-local function updateSubPanels()
-    local hasBlock = selectedBlock ~= nil
-    movePanel.Visible   = hasBlock and activeMode == "move"
-    rotatePanel.Visible = hasBlock and activeMode == "rotate"
-    scalePanel.Visible  = hasBlock and activeMode == "scale"
-end
-
--- ── SELECTION BOX ──────────────────────────────────────────────────
-local selectionBox = nil
-
-local function clearSelectionBox()
-    if selectionBox then
-        selectionBox:Destroy()
-        selectionBox = nil
-    end
-end
-
-local function createSelectionBox(model)
-    clearSelectionBox()
-    selectionBox = Instance.new("SelectionBox")
-    selectionBox.Color3             = C_YELLOW
-    selectionBox.LineThickness      = 0.06
-    selectionBox.SurfaceTransparency = 0.82
-    selectionBox.SurfaceColor3      = C_YELLOW
-    -- Adornee: model если есть PrimaryPart, иначе первый BasePart
+local function moveToCF(model, cf)
     if model.PrimaryPart then
-        selectionBox.Adornee = model
+        model:SetPrimaryPartCFrame(cf)
     else
-        selectionBox.Adornee = model:FindFirstChildWhichIsA("BasePart")
+        local pp = getPP(model)
+        if pp then pp.CFrame = cf end
     end
-    selectionBox.Parent = workspace
 end
 
--- ── DESELECT ───────────────────────────────────────────────────────
-local function deselectBlock()
-    selectedBlock = nil
-    clearSelectionBox()
-    updateSubPanels()
-    setStatus("🔧 FreeBuilder — нажми на блок")
-end
-
--- ── SELECT ─────────────────────────────────────────────────────────
-local function selectBlock(model)
-    selectedBlock = model
-    createSelectionBox(model)
-    updateSubPanels()
-    setStatus("📦 " .. model.Name .. "  |  " .. activeMode)
-end
-
--- ── FIND BLOCK MODEL ───────────────────────────────────────────────
--- БАГ #2 исправлен: строго ищем Model чей прямой parent = BUILD_MODEL_FOLDER
--- Это исключает Character и другие Models
 local function getBlockModel(part)
-    if not BUILD_MODEL_FOLDER then return nil end
-    local obj = part
-    while obj do
-        if obj:IsA("Model") and obj.Parent == BUILD_MODEL_FOLDER then
-            return obj
-        end
-        obj = obj.Parent
+    if not BUILD_FOLDER then return nil end
+    local o = part
+    while o do
+        if o:IsA("Model") and o.Parent == BUILD_FOLDER then return o end
+        o = o.Parent
     end
     return nil
 end
 
--- ── RAYCAST ────────────────────────────────────────────────────────
-local function raycastScreen(screenPos)
+-- ═══════════════════════════════════════
+-- GUI — НИЖНЯЯ ПАНЕЛЬ
+-- ═══════════════════════════════════════
+local gui = Instance.new("ScreenGui")
+gui.Name           = "FreeBuilder"
+gui.ResetOnSpawn   = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder   = 120
+gui.Parent         = player.PlayerGui
+
+-- фон нижней панели
+local bottomBar = Instance.new("Frame")
+bottomBar.Size             = UDim2.new(0, 370, 0, 66)
+bottomBar.Position         = UDim2.new(0.5, -185, 1, -82)
+bottomBar.BackgroundColor3 = C.panel
+bottomBar.BorderSizePixel  = 0
+bottomBar.Parent           = gui
+corner(bottomBar, 18)
+gradient(bottomBar,
+    Color3.fromRGB(238, 98, 98),
+    Color3.fromRGB(172, 44, 44), 100)
+stroke(bottomBar, Color3.fromRGB(255,200,200), 1.5)
+
+local bbL = Instance.new("UIListLayout")
+bbL.FillDirection       = Enum.FillDirection.Horizontal
+bbL.HorizontalAlignment = Enum.HorizontalAlignment.Center
+bbL.VerticalAlignment   = Enum.VerticalAlignment.Center
+bbL.Padding             = UDim.new(0, 6)
+bbL.Parent              = bottomBar
+
+local bbP = Instance.new("UIPadding")
+bbP.PaddingLeft  = UDim.new(0, 10)
+bbP.PaddingRight = UDim.new(0, 10)
+bbP.Parent       = bottomBar
+
+-- фабрика кнопки панели
+local function makeBtn(icon, label)
+    local wrap = Instance.new("Frame")
+    wrap.Size             = UDim2.new(0, 60, 0, 54)
+    wrap.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    wrap.BackgroundTransparency = 0.9
+    wrap.BorderSizePixel  = 0
+    wrap.Parent           = bottomBar
+    corner(wrap, 12)
+
+    local btn = Instance.new("TextButton")
+    btn.Size              = UDim2.new(1, 0, 0, 36)
+    btn.Position          = UDim2.new(0, 0, 0, 2)
+    btn.BackgroundTransparency = 1
+    btn.BorderSizePixel   = 0
+    btn.Text              = icon
+    btn.TextSize          = 24
+    btn.Font              = Enum.Font.GothamBold
+    btn.TextColor3        = C.white
+    btn.AutoButtonColor   = false
+    btn.Parent            = wrap
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size              = UDim2.new(1, 0, 0, 14)
+    lbl.Position          = UDim2.new(0, 0, 1, -15)
+    lbl.BackgroundTransparency = 1
+    lbl.Text              = label
+    lbl.TextSize          = 9
+    lbl.Font              = Enum.Font.Gotham
+    lbl.TextColor3        = C.white
+    lbl.TextTransparency  = 0.3
+    lbl.Parent            = wrap
+
+    return btn, wrap
+end
+
+local btnSelect, wSelect = makeBtn("◻",  "Select")
+local btnMove,   wMove   = makeBtn("✥",  "Move")
+local btnRotate, wRotate = makeBtn("↻",  "Rotate")
+local btnScale,  wScale  = makeBtn("⊡",  "Scale")
+local btnSave,   wSave   = makeBtn("💾", "Save")
+
+-- ── ПРАВАЯ ПАНЕЛЬ INFO ──────────────────────────────
+local infoPanel = Instance.new("Frame")
+infoPanel.Size             = UDim2.new(0, 195, 0, 210)
+infoPanel.Position         = UDim2.new(1, -205, 0.5, -105)
+infoPanel.BackgroundColor3 = C.panel
+infoPanel.BorderSizePixel  = 0
+infoPanel.Visible          = false
+infoPanel.Parent           = gui
+corner(infoPanel, 14)
+gradient(infoPanel,
+    Color3.fromRGB(238, 98, 98),
+    Color3.fromRGB(172, 44, 44), 150)
+stroke(infoPanel, Color3.fromRGB(255,200,200), 1.5)
+
+local infoTitle = Instance.new("TextLabel")
+infoTitle.Size             = UDim2.new(1, -12, 0, 30)
+infoTitle.Position         = UDim2.new(0, 6, 0, 6)
+infoTitle.BackgroundColor3 = Color3.fromRGB(0,0,0)
+infoTitle.BackgroundTransparency = 0.55
+infoTitle.BorderSizePixel  = 0
+infoTitle.Text             = "📦 Block"
+infoTitle.TextSize         = 12
+infoTitle.Font             = Enum.Font.GothamBold
+infoTitle.TextColor3       = C.white
+infoTitle.TextXAlignment   = Enum.TextXAlignment.Center
+infoTitle.Parent           = infoPanel
+corner(infoTitle, 8)
+
+local function makeRow(label, y)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size             = UDim2.new(1, -12, 0, 14)
+    lbl.Position         = UDim2.new(0, 6, 0, y)
+    lbl.BackgroundTransparency = 1
+    lbl.Text             = label
+    lbl.TextSize         = 9
+    lbl.Font             = Enum.Font.Gotham
+    lbl.TextColor3       = C.white
+    lbl.TextTransparency = 0.3
+    lbl.TextXAlignment   = Enum.TextXAlignment.Left
+    lbl.Parent           = infoPanel
+
+    local val = Instance.new("TextLabel")
+    val.Size             = UDim2.new(1, -12, 0, 24)
+    val.Position         = UDim2.new(0, 6, 0, y + 13)
+    val.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    val.BackgroundTransparency = 0.6
+    val.BorderSizePixel  = 0
+    val.Text             = "—"
+    val.TextSize         = 11
+    val.Font             = Enum.Font.GothamMedium
+    val.TextColor3       = C.white
+    val.TextXAlignment   = Enum.TextXAlignment.Center
+    val.Parent           = infoPanel
+    corner(val, 6)
+    return val
+end
+
+local rowPos = makeRow("POSITION", 44)
+local rowSz  = makeRow("SIZE",     90)
+local rowRot = makeRow("ROTATION", 136)
+
+-- ── ШАГ (левый нижний угол) ─────────────────────────
+local stepFrame = Instance.new("Frame")
+stepFrame.Size             = UDim2.new(0, 68, 0, 42)
+stepFrame.Position         = UDim2.new(0, 10, 1, -58)
+stepFrame.BackgroundColor3 = C.panel
+stepFrame.BorderSizePixel  = 0
+stepFrame.Visible          = false
+stepFrame.Parent           = gui
+corner(stepFrame, 10)
+gradient(stepFrame,
+    Color3.fromRGB(238, 98, 98),
+    Color3.fromRGB(172, 44, 44), 100)
+
+local stepVal = Instance.new("TextLabel")
+stepVal.Size             = UDim2.new(1, 0, 0, 26)
+stepVal.Position         = UDim2.new(0, 0, 0, 2)
+stepVal.BackgroundTransparency = 1
+stepVal.Text             = "1"
+stepVal.TextSize         = 20
+stepVal.Font             = Enum.Font.GothamBold
+stepVal.TextColor3       = C.white
+stepVal.Parent           = stepFrame
+
+local stepSub = Instance.new("TextLabel")
+stepSub.Size             = UDim2.new(1, 0, 0, 12)
+stepSub.Position         = UDim2.new(0, 0, 1, -14)
+stepSub.BackgroundTransparency = 1
+stepSub.Text             = "STEP"
+stepSub.TextSize         = 8
+stepSub.Font             = Enum.Font.Gotham
+stepSub.TextColor3       = C.white
+stepSub.TextTransparency = 0.35
+stepSub.Parent           = stepFrame
+
+-- ── MODE TAG (посередине над панелью) ───────────────
+local modeTag = Instance.new("TextLabel")
+modeTag.Size             = UDim2.new(0, 110, 0, 24)
+modeTag.Position         = UDim2.new(0.5, -55, 1, -112)
+modeTag.BackgroundColor3 = C.dark
+modeTag.BackgroundTransparency = 0.25
+modeTag.BorderSizePixel  = 0
+modeTag.Text             = "MODE: LOCAL"
+modeTag.TextSize         = 10
+modeTag.Font             = Enum.Font.GothamBold
+modeTag.TextColor3       = C.white
+modeTag.Visible          = false
+modeTag.Parent           = gui
+corner(modeTag, 7)
+
+-- ═══════════════════════════════════════
+-- ПОДСВЕТКА АКТИВНОГО РЕЖИМА
+-- ═══════════════════════════════════════
+local modeWraps = {
+    select=wSelect, move=wMove, rotate=wRotate, scale=wScale
+}
+
+local function setHL(m)
+    for k, w in pairs(modeWraps) do
+        if k == m then
+            w.BackgroundTransparency = 0.05
+            stroke(w, C.yellow, 2)
+        else
+            w.BackgroundTransparency = 0.9
+            -- убрать обводку
+            local s = w:FindFirstChildWhichIsA("UIStroke")
+            if s then s:Destroy() end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════
+-- COMMIT
+-- ═══════════════════════════════════════
+local function commitMove(model)
+    if not model or not model.Parent or not rfCommitMove then return end
+    local pp = getPP(model)
+    if pp then pcall(rfCommitMove.InvokeServer, rfCommitMove, model, pp.CFrame) end
+end
+
+local function commitResize(model, sz)
+    if not model or not model.Parent or not rfCommitResize then return end
+    pcall(rfCommitResize.InvokeServer, rfCommitResize, model, sz)
+end
+
+-- ═══════════════════════════════════════
+-- INFO UPDATE
+-- ═══════════════════════════════════════
+local function updateInfo()
+    if not sel or not sel.Parent then return end
+    local pp = getPP(sel)
+    if not pp then return end
+    local p       = pp.Position
+    local s       = pp.Size
+    local rx,ry,rz = pp.CFrame:ToEulerAnglesXYZ()  -- БАГ4 FIX: один вызов
+    local function f(n) return math.floor(n*100)/100 end
+    rowPos.Text = string.format("%.1f, %.1f, %.1f", f(p.X), f(p.Y), f(p.Z))
+    rowSz.Text  = string.format("%.1f, %.1f, %.1f", f(s.X), f(s.Y), f(s.Z))
+    rowRot.Text = string.format("%d°, %d°, %d°",
+        math.floor(math.deg(rx)),
+        math.floor(math.deg(ry)),
+        math.floor(math.deg(rz)))
+end
+
+-- ═══════════════════════════════════════
+-- SELECTION BOX
+-- ═══════════════════════════════════════
+local function makeSelBox(model, color)
+    if selBox then selBox:Destroy() end
+    local pp = getPP(model)
+    if not pp then return end
+    selBox = Instance.new("SelectionBox")
+    selBox.Color3              = color
+    selBox.LineThickness       = 0.07
+    selBox.SurfaceTransparency = 0.83
+    selBox.SurfaceColor3       = color
+    selBox.Adornee             = model.PrimaryPart and model or pp
+    selBox.Parent              = workspace
+end
+
+-- ═══════════════════════════════════════
+-- ОЧИСТКА ХЕНДЛОВ  (БАГ1 + БАГ5 FIX)
+-- ═══════════════════════════════════════
+local function clearHandles()
+    if hMove   then hMove:Destroy();   hMove   = nil end
+    if hRotate then hRotate:Destroy(); hRotate = nil end
+
+    -- БАГ1 FIX: disconnect scaleConn отдельно
+    if scaleConn then scaleConn:Disconnect(); scaleConn = nil end
+
+    -- БАГ5 FIX: disconnect InputEnded листенер
+    if inputEndedConn then inputEndedConn:Disconnect(); inputEndedConn = nil end
+
+    for _, s in ipairs(hScaleList) do s:Destroy() end
+    hScaleList = {}
+
+    if selBox then selBox:Destroy(); selBox = nil end
+end
+
+-- ═══════════════════════════════════════
+-- FACES для Scale
+-- ═══════════════════════════════════════
+local FACES = {
+    {norm = Vector3.new( 1, 0, 0), id = Enum.NormalId.Right},
+    {norm = Vector3.new(-1, 0, 0), id = Enum.NormalId.Left},
+    {norm = Vector3.new( 0, 1, 0), id = Enum.NormalId.Top},
+    {norm = Vector3.new( 0,-1, 0), id = Enum.NormalId.Bottom},
+    {norm = Vector3.new( 0, 0, 1), id = Enum.NormalId.Back},
+    {norm = Vector3.new( 0, 0,-1), id = Enum.NormalId.Front},
+}
+
+-- ═══════════════════════════════════════
+-- РЕЖИМ MOVE
+-- ═══════════════════════════════════════
+local function applyMoveMode(model)
+    makeSelBox(model, modeColor.move)
+    local pp = getPP(model)
+    if not pp then return end
+
+    hMove = Instance.new("Handles")
+    hMove.Adornee = pp
+    hMove.Color3  = modeColor.move
+    hMove.Style   = Enum.HandlesStyle.Movement
+    hMove.Parent  = workspace
+
+    local startPos = nil
+    local startRot = nil  -- БАГ7 FIX: сохраняем ротацию отдельно
+
+    hMove.MouseButton1Down:Connect(function()
+        dragActive = true
+        local cf   = getCF(model)
+        startPos   = cf.Position
+        startRot   = cf.Rotation  -- только поворот, без позиции
+    end)
+
+    hMove.MouseDrag:Connect(function(face, distance)
+        if not dragActive or not startPos or not model.Parent then return end
+        -- БАГ3 FIX: используем .Rotation вместо CFrame - Vector3
+        -- нормаль грани в мировых координатах через startRot
+        local normal = startRot * Vector3.FromNormalId(face)
+        local newPos = startPos + normal * distance
+        local newCF  = CFrame.new(newPos) * startRot
+        moveToCF(model, newCF)
+        updateInfo()
+    end)
+
+    hMove.MouseButton1Up:Connect(function()
+        dragActive = false
+        commitMove(model)
+        startPos = nil; startRot = nil
+    end)
+end
+
+-- ═══════════════════════════════════════
+-- РЕЖИМ ROTATE
+-- ═══════════════════════════════════════
+local function applyRotateMode(model)
+    makeSelBox(model, modeColor.rotate)
+    local pp = getPP(model)
+    if not pp then return end
+
+    hRotate = Instance.new("ArcHandles")
+    hRotate.Adornee = pp
+    hRotate.Parent  = workspace
+
+    local startCF = nil
+
+    hRotate.MouseButton1Down:Connect(function()
+        dragActive = true
+        startCF = getCF(model)
+    end)
+
+    hRotate.MouseDrag:Connect(function(axis, relAngle, _delta)
+        if not dragActive or not startCF or not model.Parent then return end
+        -- ось вращения в мировых координатах
+        local ax
+        if    axis == Enum.Axis.X then ax = startCF.RightVector
+        elseif axis == Enum.Axis.Y then ax = startCF.UpVector
+        else                            ax = startCF.LookVector end
+
+        local rot   = CFrame.fromAxisAngle(ax, relAngle)
+        -- БАГ3 FIX: startCF.Rotation вместо startCF - startCF.Position
+        local newCF = CFrame.new(startCF.Position) * rot * startCF.Rotation
+        moveToCF(model, newCF)
+        updateInfo()
+    end)
+
+    hRotate.MouseButton1Up:Connect(function()
+        dragActive = false
+        commitMove(model)
+        startCF = nil
+    end)
+end
+
+-- ═══════════════════════════════════════
+-- РЕЖИМ SCALE
+-- ═══════════════════════════════════════
+local function applyScaleMode(model)
+    makeSelBox(model, modeColor.scale)
+    local pp = getPP(model)
+    if not pp then return end
+
+    local function sphereCF(norm)
+        -- БАГ6 FIX: компоненты по отдельности, не Vector3*Vector3
+        return CFrame.new(
+            norm.X * pp.Size.X * 0.5,
+            norm.Y * pp.Size.Y * 0.5,
+            norm.Z * pp.Size.Z * 0.5
+        )
+    end
+
+    -- создаём 6 шаров
+    for _, face in ipairs(FACES) do
+        local s = Instance.new("SphereHandleAdornment")
+        s.Adornee     = pp
+        s.Color3      = C.orange
+        s.Radius      = 0.38
+        s.AlwaysOnTop = false
+        s.CFrame      = sphereCF(face.norm)
+        s.Parent      = workspace
+        table.insert(hScaleList, s)
+    end
+
+    local function refreshSpheres()
+        for i, s in ipairs(hScaleList) do
+            s.CFrame = sphereCF(FACES[i].norm)
+        end
+    end
+
+    -- drag state
+    local activeNorm  = nil
+    local startSz     = nil
+    local startMouse  = nil
+
+    -- mousedown на каждом шаре
+    for i, s in ipairs(hScaleList) do
+        local face = FACES[i]
+        s.MouseButton1Down:Connect(function()
+            dragActive  = true
+            activeNorm  = face.norm
+            startSz     = pp.Size
+            startMouse  = nil
+        end)
+    end
+
+    -- БАГ1 FIX: scaleConn — внешняя переменная
+    scaleConn = RunService.Heartbeat:Connect(function()
+        if not dragActive or not activeNorm then return end
+        if not model.Parent then return end
+
+        local mousePos = UserInputService:GetMouseLocation()
+        local ray      = camera:ScreenPointToRay(mousePos.X, mousePos.Y)
+
+        -- мировой вектор нормали грани (с учётом ротации блока)
+        local normWorld = pp.CFrame:VectorToWorldSpace(activeNorm)
+
+        -- БАГ2 FIX: math.abs по компонентам
+        local halfX = pp.Size.X * 0.5 * math.abs(activeNorm.X)
+        local halfY = pp.Size.Y * 0.5 * math.abs(activeNorm.Y)
+        local halfZ = pp.Size.Z * 0.5 * math.abs(activeNorm.Z)
+        local faceOrigin = pp.CFrame.Position + normWorld * (halfX + halfY + halfZ)
+
+        local denom = ray.Direction:Dot(normWorld)
+        if math.abs(denom) < 0.001 then return end
+
+        local t    = (faceOrigin - ray.Origin):Dot(normWorld) / denom
+        local hit  = ray.Origin + ray.Direction * t
+        local dist = (hit - pp.CFrame.Position):Dot(normWorld)
+
+        if not startMouse then startMouse = dist; return end
+
+        local delta = dist - startMouse
+        local MIN   = 0.1
+
+        local newSz = Vector3.new(
+            math.max(MIN, startSz.X + (math.abs(activeNorm.X) > 0.5 and delta*2 or 0)),
+            math.max(MIN, startSz.Y + (math.abs(activeNorm.Y) > 0.5 and delta*2 or 0)),
+            math.max(MIN, startSz.Z + (math.abs(activeNorm.Z) > 0.5 and delta*2 or 0))
+        )
+        pp.Size = newSz
+        refreshSpheres()
+        updateInfo()
+    end)
+
+    -- БАГ5 FIX: один листенер, сохраняем в inputEndedConn
+    inputEndedConn = UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            if dragActive and activeNorm then
+                dragActive = false
+                commitResize(model, pp.Size)
+                activeNorm = nil; startSz = nil; startMouse = nil
+            end
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════
+-- ПРИМЕНИТЬ РЕЖИМ
+-- ═══════════════════════════════════════
+local stepMap = {select="", move="1 st", rotate="15°", scale="0.5"}
+
+local function applyMode(m)
+    mode = m
+    setHL(m)
+    clearHandles()
+
+    local hasBlock = sel ~= nil
+    stepFrame.Visible = hasBlock and m ~= "select"
+    modeTag.Visible   = hasBlock and m ~= "select"
+    stepVal.Text      = stepMap[m] or ""
+
+    if not sel then return end
+
+    if     m == "move"   then applyMoveMode(sel)
+    elseif m == "rotate" then applyRotateMode(sel)
+    elseif m == "scale"  then applyScaleMode(sel)
+    elseif m == "select" then makeSelBox(sel, modeColor.select)
+    end
+end
+
+-- ═══════════════════════════════════════
+-- SELECT / DESELECT
+-- ═══════════════════════════════════════
+local function deselect()
+    sel = nil
+    clearHandles()
+    infoPanel.Visible = false
+    modeTag.Visible   = false
+    stepFrame.Visible = false
+end
+
+local function selectModel(model)
+    if sel == model then return end
+    deselect()
+    sel = model
+    infoPanel.Visible = true
+    infoTitle.Text    = "📦 " .. model.Name
+    updateInfo()
+    -- при первом выборе → сразу move
+    applyMode(mode == "select" and "move" or mode)
+end
+
+-- ═══════════════════════════════════════
+-- RAYCAST + INPUT
+-- ═══════════════════════════════════════
+local function doRaycast(screenPos)
     local ray = camera:ScreenPointToRay(screenPos.X, screenPos.Y)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    -- БАГ #8 исправлен: character берём динамически
-    local char = player.Character
-    params.FilterDescendantsInstances = char and {char} or {}
-    return workspace:Raycast(ray.Origin, ray.Direction * 1200, params)
+    local p   = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    local ch = player.Character
+    p.FilterDescendantsInstances = ch and {ch} or {}
+    return workspace:Raycast(ray.Origin, ray.Direction * 1500, p)
 end
 
--- ── TAP / CLICK НА МИР ─────────────────────────────────────────────
-local function onWorldTap(screenPos)
-    local result = raycastScreen(screenPos)
+UserInputService.InputBegan:Connect(function(inp, gp)
+    if gp or dragActive then return end
+    if inp.UserInputType ~= Enum.UserInputType.MouseButton1
+    and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+
+    local pos    = Vector2.new(inp.Position.X, inp.Position.Y)
+    local result = doRaycast(pos)
+
     if not result or not result.Instance then
-        deselectBlock()
-        return
+        deselect(); return
     end
+
     local model = getBlockModel(result.Instance)
-    if model then
-        selectBlock(model)
-    else
-        deselectBlock()
-    end
-end
+    if model then selectModel(model)
+    else deselect() end
+end)
 
--- ── COMMIT HELPERS ─────────────────────────────────────────────────
-local function safeCommitMove(model)
-    if not model or not model.Parent then return end
-    if not rfCommitMove then
-        warn("[FreeBuilder] CommitMove не найден, изменения только локальные!")
-        return
-    end
-    local pp = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
-    if not pp then return end
-    pcall(rfCommitMove.InvokeServer, rfCommitMove, model, pp.CFrame)
-end
-
-local function safeCommitResize(model, newSize)
-    if not model or not model.Parent then return end
-    if not rfCommitResize then
-        warn("[FreeBuilder] CommitResize не найден, изменения только локальные!")
-        return
-    end
-    pcall(rfCommitResize.InvokeServer, rfCommitResize, model, newSize)
-end
-
--- ── MOVE ───────────────────────────────────────────────────────────
-local MOVE_STEP = 1  -- studs за нажатие
-
-local function moveBlock(axis, dir)
-    if not selectedBlock or not selectedBlock.Parent then return end
-    local pp = selectedBlock.PrimaryPart or selectedBlock:FindFirstChildWhichIsA("BasePart")
-    if not pp then return end
-
-    local cf = pp.CFrame
-    local delta
-    if axis == "X" then delta = Vector3.new(MOVE_STEP * dir, 0, 0)
-    elseif axis == "Y" then delta = Vector3.new(0, MOVE_STEP * dir, 0)
-    else delta = Vector3.new(0, 0, MOVE_STEP * dir) end
-
-    -- БАГ #4 исправлен: CFrame + Vector3 корректно сохраняет ротацию
-    local newCF = cf + delta
-    if selectedBlock.PrimaryPart then
-        selectedBlock:SetPrimaryPartCFrame(newCF)
-    else
-        pp.CFrame = newCF
-    end
-    safeCommitMove(selectedBlock)
-end
-
--- ── ROTATE ─────────────────────────────────────────────────────────
-local ROT_STEP = math.rad(15)
-
-local function rotateBlock(axis, dir)
-    if not selectedBlock or not selectedBlock.Parent then return end
-    local pp = selectedBlock.PrimaryPart or selectedBlock:FindFirstChildWhichIsA("BasePart")
-    if not pp then return end
-
-    local cf = pp.CFrame
-    local angle = ROT_STEP * dir
-    local rot
-    if axis == "X" then rot = CFrame.Angles(angle, 0, 0)
-    elseif axis == "Y" then rot = CFrame.Angles(0, angle, 0)
-    else rot = CFrame.Angles(0, 0, angle) end
-
-    local newCF = cf * rot
-    if selectedBlock.PrimaryPart then
-        selectedBlock:SetPrimaryPartCFrame(newCF)
-    else
-        pp.CFrame = newCF
-    end
-    safeCommitMove(selectedBlock)
-end
-
--- ── SCALE ──────────────────────────────────────────────────────────
-local SCALE_STEP = 0.5
-local MIN_SIZE   = 0.1
-
-local function scaleBlock(axis, dir)
-    if not selectedBlock or not selectedBlock.Parent then return end
-    local pp = selectedBlock.PrimaryPart or selectedBlock:FindFirstChildWhichIsA("BasePart")
-    if not pp then return end
-
-    local sz = pp.Size
-    local newSize
-    if axis == "X" then
-        newSize = Vector3.new(math.max(MIN_SIZE, sz.X + SCALE_STEP * dir), sz.Y, sz.Z)
-    elseif axis == "Y" then
-        newSize = Vector3.new(sz.X, math.max(MIN_SIZE, sz.Y + SCALE_STEP * dir), sz.Z)
-    else
-        newSize = Vector3.new(sz.X, sz.Y, math.max(MIN_SIZE, sz.Z + SCALE_STEP * dir))
-    end
-
-    -- Preview локально
-    pp.Size = newSize
-    -- БАГ #7: CommitResize передаём newSize — сервер масштабирует все Parts модели
-    safeCommitResize(selectedBlock, newSize)
-end
-
--- ── THROTTLED HOLD PRESS ────────────────────────────────────────────
--- БАГ #5 исправлен: throttle 0.15с, commitMove только при отпускании для move
-local function setupHold(btn, actionFn, commitOnRelease)
-    local conn
-    local lastTime = 0
-    btn.MouseButton1Down:Connect(function()
-        actionFn()  -- первый клик сразу
-        conn = RunService.Heartbeat:Connect(function()
-            -- throttle: не чаще раз в 0.15 сек
-            local now = tick()
-            if now - lastTime >= 0.15 then
-                lastTime = now
-                actionFn()
-            end
-        end)
-    end)
-    btn.MouseButton1Up:Connect(function()
-        if conn then conn:Disconnect(); conn = nil end
-        if commitOnRelease then
-            -- финальный commit при отпускании (для move чтобы не флудить)
-            if selectedBlock and selectedBlock.Parent then
-                safeCommitMove(selectedBlock)
-            end
-        end
-    end)
-    -- Touch support
-    btn.TouchLongPress:Connect(function()
-        if conn then conn:Disconnect(); conn = nil end
-    end)
-end
-
--- ── КНОПКИ РЕЖИМОВ ─────────────────────────────────────────────────
+-- ═══════════════════════════════════════
+-- КНОПКИ
+-- ═══════════════════════════════════════
+btnSelect.MouseButton1Click:Connect(function() applyMode("select") end)
 btnMove.MouseButton1Click:Connect(function()
-    activeMode = "move"
-    highlightMode("move")
-    updateSubPanels()
-    if selectedBlock then setStatus("📦 " .. selectedBlock.Name .. "  |  move") end
+    if sel then applyMode("move") end
 end)
-
 btnRotate.MouseButton1Click:Connect(function()
-    activeMode = "rotate"
-    highlightMode("rotate")
-    updateSubPanels()
-    if selectedBlock then setStatus("📦 " .. selectedBlock.Name .. "  |  rotate") end
+    if sel then applyMode("rotate") end
 end)
-
 btnScale.MouseButton1Click:Connect(function()
-    activeMode = "scale"
-    highlightMode("scale")
-    updateSubPanels()
-    if selectedBlock then setStatus("📦 " .. selectedBlock.Name .. "  |  scale") end
+    if sel then applyMode("scale") end
+end)
+btnSave.MouseButton1Click:Connect(function()
+    if not sel or not sel.Parent then return end
+    commitMove(sel)
+    local pp = getPP(sel)
+    if pp then commitResize(sel, pp.Size) end
+    -- визуальный фидбек
+    wSave.BackgroundColor3 = C.green
+    task.delay(0.6, function() wSave.BackgroundColor3 = Color3.fromRGB(255,255,255) end)
 end)
 
-btnDesel.MouseButton1Click:Connect(function()
-    deselectBlock()
-end)
-
--- ── ПРИВЯЗКА КНОПОК MOVE ───────────────────────────────────────────
--- commitOnRelease=true: не флудим CommitMove при удержании
-setupHold(btnMXp, function() moveBlock("X",  1) end, false)
-setupHold(btnMXm, function() moveBlock("X", -1) end, false)
-setupHold(btnMYp, function() moveBlock("Y",  1) end, false)
-setupHold(btnMYm, function() moveBlock("Y", -1) end, false)
-setupHold(btnMZp, function() moveBlock("Z",  1) end, false)
-setupHold(btnMZm, function() moveBlock("Z", -1) end, false)
-
--- Добавляем финальный commitMove при отпускании для move-кнопок
-local moveBtns = {btnMXp, btnMXm, btnMYp, btnMYm, btnMZp, btnMZm}
-for _, b in ipairs(moveBtns) do
-    b.MouseButton1Up:Connect(function()
-        if selectedBlock and selectedBlock.Parent then
-            safeCommitMove(selectedBlock)
-        end
-    end)
-end
-
--- ── ПРИВЯЗКА КНОПОК ROTATE ─────────────────────────────────────────
--- Tap = +15°, долгое нажатие = −15°
-btnRX.MouseButton1Click:Connect(function() rotateBlock("X", 1) end)
-btnRY.MouseButton1Click:Connect(function() rotateBlock("Y", 1) end)
-btnRZ.MouseButton1Click:Connect(function() rotateBlock("Z", 1) end)
-
-local function setupRotLong(btn, axis)
-    local conn
-    btn.MouseButton1Down:Connect(function()
-        local t = tick()
-        conn = RunService.Heartbeat:Connect(function()
-            if tick() - t > 0.45 then
-                if conn then conn:Disconnect(); conn = nil end
-                rotateBlock(axis, -1)
-            end
-        end)
-    end)
-    btn.MouseButton1Up:Connect(function()
-        if conn then conn:Disconnect(); conn = nil end
-    end)
-end
-setupRotLong(btnRX, "X")
-setupRotLong(btnRY, "Y")
-setupRotLong(btnRZ, "Z")
-
--- ── ПРИВЯЗКА КНОПОК SCALE ──────────────────────────────────────────
-setupHold(btnSX, function() scaleBlock("X",  1) end, false)
-setupHold(btnSY, function() scaleBlock("Y",  1) end, false)
-setupHold(btnSZ, function() scaleBlock("Z",  1) end, false)
-
-local function setupScaleLong(btn, axis)
-    local conn
-    btn.MouseButton1Down:Connect(function()
-        local t = tick()
-        conn = RunService.Heartbeat:Connect(function()
-            if tick() - t > 0.45 then
-                if conn then conn:Disconnect(); conn = nil end
-                scaleBlock(axis, -1)
-            end
-        end)
-    end)
-    btn.MouseButton1Up:Connect(function()
-        if conn then conn:Disconnect(); conn = nil end
-    end)
-end
-setupScaleLong(btnSX, "X")
-setupScaleLong(btnSY, "Y")
-setupScaleLong(btnSZ, "Z")
-
--- ── INPUT ──────────────────────────────────────────────────────────
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-
-    if input.UserInputType == Enum.UserInputType.Touch
-    or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        local pos = Vector2.new(input.Position.X, input.Position.Y)
-        onWorldTap(pos)
-    end
-end)
-
--- ── SAFETY: снять выбор если блок удалили ─────────────────────────
+-- ═══════════════════════════════════════
+-- SAFETY + LIVE UPDATE
+-- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
-    if selectedBlock and not selectedBlock.Parent then
-        deselectBlock()
-    end
+    if sel and not sel.Parent then deselect() end
+    if sel then updateInfo() end
 end)
 
--- ── INIT ───────────────────────────────────────────────────────────
-highlightMode("move")
-setStatus("🔧 FreeBuilder v1.1 готов!")
-print("[FreeBuilder] v1.1 запущен успешно")
+-- ═══════════════════════════════════════
+-- INIT
+-- ═══════════════════════════════════════
+setHL("select")
+print("[FreeBuilder] v2.1 loaded ✓")
