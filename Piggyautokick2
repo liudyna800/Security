@@ -1,12 +1,12 @@
 --[[
-    Aim Bot + Auto Shoot для 1v1 PvP
-    Поддержка телефона (ТАП по экрану)
+    Silent Aim Bot для 1v1 PvP
+    Пули летят прямо во врага, камера не двигается
 ]]
 
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 
 local Window = OrionLib:MakeWindow({
-    Name = "Aim Bot Mobile",
+    Name = "Silent Aim",
     HidePremium = false,
     SaveConfig = false
 })
@@ -20,41 +20,17 @@ local Tab = Window:MakeTab({
 local players = game.Players
 local workspace = game.Workspace
 local localPlayer = players.LocalPlayer
-local camera = workspace.CurrentCamera
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 -- Состояния
-local aimEnabled = false
+local silentAim = false
 local autoShoot = false
 local aimPart = "Head"
-local shootCooldown = 0.1 -- Задержка между выстрелами
-local lastShoot = 0
+local teamCheck = false
 
--- Быстрый выстрел
-local function shoot()
-    if tick() - lastShoot < shootCooldown then return end
-    
-    local char = localPlayer.Character
-    if not char then return end
-    
-    -- Ищем любое оружие в руках
-    local tool = char:FindFirstChildOfClass("Tool")
-    if not tool then return end
-    
-    -- Пробуем все RemoteEvent в оружии
-    for _, child in ipairs(tool:GetDescendants()) do
-        if child:IsA("RemoteEvent") then
-            pcall(function()
-                child:FireServer()
-                lastShoot = tick()
-            end)
-            return
-        end
-    end
-end
-
--- Поиск врага
-local function getTarget()
+-- Главная функция Silent Aim
+local function getNearestEnemy()
     local char = localPlayer.Character
     if not char then return nil end
     local myRoot = char:FindFirstChild("HumanoidRootPart")
@@ -67,20 +43,24 @@ local function getTarget()
         if player ~= localPlayer and player.Character then
             local targetChar = player.Character
             local humanoid = targetChar:FindFirstChild("Humanoid")
-            local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
-            local targetHead = targetChar:FindFirstChild("Head")
             
-            if humanoid and humanoid.Health > 0 and targetRoot and targetHead then
-                local targetPos = aimPart == "Head" and targetHead.Position or targetRoot.Position
-                local dist = (myRoot.Position - targetPos).Magnitude
+            -- Проверка команды
+            if teamCheck and player.Team == localPlayer.Team then
+                continue
+            end
+            
+            if humanoid and humanoid.Health > 0 then
+                local targetPart = targetChar:FindFirstChild(aimPart)
+                if not targetPart then
+                    targetPart = targetChar:FindFirstChild("Head")
+                end
                 
-                if dist < minDist then
-                    minDist = dist
-                    nearest = {
-                        player = player,
-                        position = targetPos,
-                        character = targetChar
-                    }
+                if targetPart then
+                    local dist = (myRoot.Position - targetPart.Position).Magnitude
+                    if dist < minDist then
+                        minDist = dist
+                        nearest = targetPart
+                    end
                 end
             end
         end
@@ -89,51 +69,88 @@ local function getTarget()
     return nearest
 end
 
--- Наведение камеры
-local function aimAt(target)
-    if not target then return end
-    
-    local camPos = camera.CFrame.Position
-    local lookAt = CFrame.lookAt(camPos, target.position)
-    camera.CFrame = camera.CFrame:Lerp(lookAt, 0.3)
-end
+-- Перехват выстрела (Silent Aim)
+local oldFireServer
+local mt = getrawmetatable(game)
+setreadonly(mt, false)
+local oldNamecall = mt.__namecall
 
--- Главный цикл
-local function mainLoop()
-    while aimEnabled do
-        local target = getTarget()
-        
-        if target then
-            aimAt(target)
-            
-            if autoShoot then
-                shoot()
+mt.__namecall = function(self, ...)
+    local args = {...}
+    local method = getnamecallmethod()
+    
+    if method == "FireServer" and silentAim then
+        if self:IsA("RemoteEvent") then
+            local target = getNearestEnemy()
+            if target then
+                -- Меняем MousePos на позицию врага
+                local newArgs = {}
+                for i, arg in ipairs(args) do
+                    if typeof(arg) == "Vector3" then
+                        table.insert(newArgs, target.Position)
+                    elseif type(arg) == "table" and arg.Position then
+                        -- Если это Mouse позиция
+                        local newMouse = {}
+                        for k, v in pairs(arg) do
+                            if k == "Position" or k == "Origin" then
+                                newMouse[k] = target.Position
+                            elseif k == "Hit" then
+                                newMouse[k] = target.Position
+                            else
+                                newMouse[k] = v
+                            end
+                        end
+                        table.insert(newArgs, newMouse)
+                    else
+                        table.insert(newArgs, arg)
+                    end
+                end
+                
+                return oldNamecall(self, unpack(newArgs))
             end
         end
-        
-        task.wait()
+    end
+    
+    return oldNamecall(self, ...)
+end
+
+-- Авто-шут цикл
+local function autoShootLoop()
+    while autoShoot and silentAim do
+        local char = localPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                -- Активируем оружие (клик)
+                pcall(function()
+                    tool:Activate()
+                    task.wait(0.1)
+                    tool:Deactivate()
+                end)
+            end
+        end
+        task.wait(0.15) -- Задержка между выстрелами
     end
 end
 
--- Тоггл
+-- Тогглы
 Tab:AddToggle({
-    Name = "🎯 Aim Bot",
+    Name = "🎯 Silent Aim",
     Default = false,
     Color = Color3.fromRGB(255, 100, 100),
     Callback = function(Value)
-        aimEnabled = Value
+        silentAim = Value
         if Value then
-            task.spawn(mainLoop)
             OrionLib:MakeNotification({
-                Name = "Aim Bot",
-                Content = "Включён! Камера следит за врагом",
-                Time = 2,
+                Name = "Silent Aim",
+                Content = "✅ Пули летят во врага!",
+                Time = 3,
                 Color = Color3.fromRGB(0, 255, 0)
             })
         else
             OrionLib:MakeNotification({
-                Name = "Aim Bot",
-                Content = "Выключен!",
+                Name = "Silent Aim",
+                Content = "❌ Выключен",
                 Time = 2,
                 Color = Color3.fromRGB(255, 0, 0)
             })
@@ -141,47 +158,98 @@ Tab:AddToggle({
     end
 })
 
--- Авто-шут
 Tab:AddToggle({
     Name = "🔫 Auto Shoot",
     Default = false,
     Color = Color3.fromRGB(255, 200, 100),
     Callback = function(Value)
         autoShoot = Value
+        if Value and silentAim then
+            task.spawn(autoShootLoop)
+        end
+        if not Value then
+            autoShoot = false
+        end
     end
 })
 
--- Большая кнопка СТРЕЛЯТЬ для телефона
-Tab:AddButton({
-    Name = "🔫 СТРЕЛЯТЬ (нажми на меня)",
-    Callback = function()
-        shoot()
-    end
-})
-
--- Часть тела
 Tab:AddDropdown({
-    Name = "Целиться в",
+    Name = "Куда стрелять",
     Default = "Head",
-    Options = {"Head", "HumanoidRootPart"},
+    Options = {"Head", "HumanoidRootPart", "UpperTorso"},
     Callback = function(Value)
         aimPart = Value
     end
 })
 
--- Бинд на выстрел (для ПК)
+Tab:AddToggle({
+    Name = "Team Check (не стрелять в своих)",
+    Default = false,
+    Color = Color3.fromRGB(100, 100, 255),
+    Callback = function(Value)
+        teamCheck = Value
+    end
+})
+
+-- Кнопка выстрела для телефона
+Tab:AddButton({
+    Name = "🔫 ВЫСТРЕЛ (тапни сюда)",
+    Callback = function()
+        local char = localPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function()
+                    tool:Activate()
+                    task.wait(0.05)
+                    tool:Deactivate()
+                end)
+                OrionLib:MakeNotification({
+                    Name = "Выстрел!",
+                    Content = "Пуля летит в ближайшего врага",
+                    Time = 1,
+                    Color = Color3.fromRGB(255, 255, 0)
+                })
+            else
+                OrionLib:MakeNotification({
+                    Name = "Ошибка",
+                    Content = "Нет оружия в руках!",
+                    Time = 2,
+                    Color = Color3.fromRGB(255, 0, 0)
+                })
+            end
+        end
+    end
+})
+
 Tab:AddBind({
     Name = "Клавиша выстрела (ПК)",
     Default = Enum.KeyCode.F,
     Hold = false,
     Callback = function()
-        shoot()
+        local char = localPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                tool:Activate()
+                task.wait(0.05)
+                tool:Deactivate()
+            end
+        end
     end
 })
 
-Tab:AddLabel("📱 Для телефона:")
-Tab:AddLabel("1. Включи Aim Bot")
-Tab:AddLabel("2. Включи Auto Shoot")
-Tab:AddLabel("3. Или жми кнопку СТРЕЛЯТЬ")
+Tab:AddLabel("📱 Как использовать:")
+Tab:AddLabel("1. Включи Silent Aim")
+Tab:AddLabel("2. Включи Auto Shoot (или жми кнопку)")
+Tab:AddLabel("3. Стой и смотри куда угодно")
+Tab:AddLabel("4. Пули сами летят во врага!")
 
 OrionLib:Init()
+
+OrionLib:MakeNotification({
+    Name = "Silent Aim готов!",
+    Content = "Включай и убивай!",
+    Time = 5,
+    Color = Color3.fromRGB(0, 255, 0)
+})
