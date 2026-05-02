@@ -1,169 +1,113 @@
 --[[
-    Aim Bot для 1v1 PvP (MM2 Style)
-    Работает с BasicGun
+    Aim Bot + Auto Shoot для 1v1 PvP
+    Поддержка телефона (ТАП по экрану)
 ]]
 
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 
 local Window = OrionLib:MakeWindow({
-    Name = "Aim Bot 1v1",
+    Name = "Aim Bot Mobile",
     HidePremium = false,
-    SaveConfig = true,
-    ConfigFolder = "AimBot1v1"
+    SaveConfig = false
 })
 
-local MainTab = Window:MakeTab({
+local Tab = Window:MakeTab({
     Name = "Aim Bot",
     Icon = "rbxassetid://4483345998",
     PremiumOnly = false
 })
 
-local players = game:GetService("Players")
-local workspace = game:GetService("Workspace")
+local players = game.Players
+local workspace = game.Workspace
 local localPlayer = players.LocalPlayer
-local mouse = localPlayer:GetMouse()
+local camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
 
--- Переменные
+-- Состояния
 local aimEnabled = false
-local aimKey = Enum.UserInputType.MouseButton2 -- ПКМ по умолчанию
-local fovRadius = 200
-local aimSmoothness = 1
-local aimPart = "Head" -- Куда целиться
 local autoShoot = false
+local aimPart = "Head"
+local shootCooldown = 0.1 -- Задержка между выстрелами
+local lastShoot = 0
 
--- Функция получения оружия
-local function getCurrentGun()
-    local char = localPlayer.Character
-    if not char then return nil end
-    
-    -- Ищем BasicGun в персонаже
-    for _, tool in ipairs(char:GetChildren()) do
-        if tool:IsA("Tool") and tool.Name == "BasicGun" then
-            return tool
-        end
-    end
-    
-    -- Ищем в Backpack
-    local backpack = localPlayer:FindFirstChild("Backpack")
-    if backpack then
-        for _, tool in ipairs(backpack:GetChildren()) do
-            if tool:IsA("Tool") and tool.Name == "BasicGun" then
-                return tool
-            end
-        end
-    end
-    
-    return nil
-end
-
--- Функция выстрела
+-- Быстрый выстрел
 local function shoot()
-    local gun = getCurrentGun()
-    if not gun then return end
-    
-    -- Через RemoteEvent Fire
-    local fireEvent = gun:FindFirstChild("Fire")
-    if fireEvent and fireEvent:IsA("RemoteEvent") then
-        fireEvent:FireServer()
-        return true
-    end
-    
-    -- Через FireWeapon
-    local fireWeaponEvent = gun:FindFirstChild("FireWeapon")
-    if fireWeaponEvent and fireWeaponEvent:IsA("RemoteEvent") then
-        fireWeaponEvent:FireServer()
-        return true
-    end
-    
-    -- Через RemoteEvent
-    for _, child in ipairs(gun:GetChildren()) do
-        if child:IsA("RemoteEvent") then
-            child:FireServer()
-            return true
-        end
-    end
-    
-    return false
-end
-
--- Функция поиска ближайшего врага
-local function getClosestEnemy()
-    local closest = nil
-    local shortestDistance = fovRadius
+    if tick() - lastShoot < shootCooldown then return end
     
     local char = localPlayer.Character
+    if not char then return end
+    
+    -- Ищем любое оружие в руках
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    
+    -- Пробуем все RemoteEvent в оружии
+    for _, child in ipairs(tool:GetDescendants()) do
+        if child:IsA("RemoteEvent") then
+            pcall(function()
+                child:FireServer()
+                lastShoot = tick()
+            end)
+            return
+        end
+    end
+end
+
+-- Поиск врага
+local function getTarget()
+    local char = localPlayer.Character
     if not char then return nil end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return nil end
+    local myRoot = char:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+    
+    local nearest = nil
+    local minDist = math.huge
     
     for _, player in ipairs(players:GetPlayers()) do
         if player ~= localPlayer and player.Character then
             local targetChar = player.Character
-            local targetHumanoid = targetChar:FindFirstChild("Humanoid")
+            local humanoid = targetChar:FindFirstChild("Humanoid")
+            local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+            local targetHead = targetChar:FindFirstChild("Head")
             
-            -- Проверка жив ли игрок
-            if targetHumanoid and targetHumanoid.Health > 0 then
-                local targetPart = targetChar:FindFirstChild(aimPart)
-                if not targetPart then
-                    targetPart = targetChar:FindFirstChild("Head") -- Фолбек на голову
-                end
+            if humanoid and humanoid.Health > 0 and targetRoot and targetHead then
+                local targetPos = aimPart == "Head" and targetHead.Position or targetRoot.Position
+                local dist = (myRoot.Position - targetPos).Magnitude
                 
-                if targetPart then
-                    local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(targetPart.Position)
-                    
-                    if onScreen then
-                        local distance = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude
-                        
-                        if distance < shortestDistance then
-                            shortestDistance = distance
-                            closest = {
-                                player = player,
-                                part = targetPart,
-                                position = targetPart.Position,
-                                screenPos = screenPos
-                            }
-                        end
-                    end
+                if dist < minDist then
+                    minDist = dist
+                    nearest = {
+                        player = player,
+                        position = targetPos,
+                        character = targetChar
+                    }
                 end
             end
         end
     end
     
-    return closest
+    return nearest
 end
 
--- Основной цикл аимбота
-local function aimBotLoop()
+-- Наведение камеры
+local function aimAt(target)
+    if not target then return end
+    
+    local camPos = camera.CFrame.Position
+    local lookAt = CFrame.lookAt(camPos, target.position)
+    camera.CFrame = camera.CFrame:Lerp(lookAt, 0.3)
+end
+
+-- Главный цикл
+local function mainLoop()
     while aimEnabled do
-        if autoShoot then
-            local target = getClosestEnemy()
-            if target then
-                -- Наводим камеру
-                workspace.CurrentCamera.CFrame = CFrame.new(
-                    workspace.CurrentCamera.CFrame.Position,
-                    target.position
-                )
-                
-                -- Стреляем
+        local target = getTarget()
+        
+        if target then
+            aimAt(target)
+            
+            if autoShoot then
                 shoot()
-            end
-        else
-            -- Режим зажатия кнопки
-            if mouse.Button2Down or (aimKey == Enum.UserInputType.MouseButton1 and mouse.Button1Down) then
-                local target = getClosestEnemy()
-                if target then
-                    -- Плавное наведение
-                    local targetCFrame = CFrame.new(
-                        workspace.CurrentCamera.CFrame.Position,
-                        target.position
-                    )
-                    workspace.CurrentCamera.CFrame = workspace.CurrentCamera.CFrame:Lerp(targetCFrame, aimSmoothness)
-                    
-                    -- Авто выстрел
-                    if autoShoot then
-                        shoot()
-                    end
-                end
             end
         end
         
@@ -171,48 +115,35 @@ local function aimBotLoop()
     end
 end
 
--- Запуск аимбота
-local function startAimBot()
-    if not aimEnabled then
-        aimEnabled = true
-        task.spawn(aimBotLoop)
-        OrionLib:MakeNotification({
-            Name = "Aim Bot",
-            Content = "✅ Aim Bot включён!",
-            Time = 3,
-            Color = Color3.fromRGB(0, 255, 0)
-        })
-    end
-end
-
--- Остановка аимбота
-local function stopAimBot()
-    aimEnabled = false
-    OrionLib:MakeNotification({
-        Name = "Aim Bot",
-        Content = "❌ Aim Bot выключен!",
-        Time = 3,
-        Color = Color3.fromRGB(255, 0, 0)
-    })
-end
-
--- Тоггл аимбота
-MainTab:AddToggle({
+-- Тоггл
+Tab:AddToggle({
     Name = "🎯 Aim Bot",
     Default = false,
     Color = Color3.fromRGB(255, 100, 100),
     Callback = function(Value)
+        aimEnabled = Value
         if Value then
-            startAimBot()
+            task.spawn(mainLoop)
+            OrionLib:MakeNotification({
+                Name = "Aim Bot",
+                Content = "Включён! Камера следит за врагом",
+                Time = 2,
+                Color = Color3.fromRGB(0, 255, 0)
+            })
         else
-            stopAimBot()
+            OrionLib:MakeNotification({
+                Name = "Aim Bot",
+                Content = "Выключен!",
+                Time = 2,
+                Color = Color3.fromRGB(255, 0, 0)
+            })
         end
     end
 })
 
--- Режим Auto Shoot
-MainTab:AddToggle({
-    Name = "🔫 Auto Shoot (авто-стрельба)",
+-- Авто-шут
+Tab:AddToggle({
+    Name = "🔫 Auto Shoot",
     Default = false,
     Color = Color3.fromRGB(255, 200, 100),
     Callback = function(Value)
@@ -220,148 +151,37 @@ MainTab:AddToggle({
     end
 })
 
--- Кнопка для ручного выстрела
-MainTab:AddBind({
-    Name = "🔥 Клавиша выстрела",
-    Default = Enum.KeyCode.F,
-    Hold = false,
+-- Большая кнопка СТРЕЛЯТЬ для телефона
+Tab:AddButton({
+    Name = "🔫 СТРЕЛЯТЬ (нажми на меня)",
     Callback = function()
-        if shoot() then
-            print("Выстрел!")
-        else
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Оружие не найдено! Возьмите BasicGun",
-                Time = 2,
-                Color = Color3.fromRGB(255, 100, 100)
-            })
-        end
+        shoot()
     end
 })
 
--- Часть тела для наведения
-local partDropdown = MainTab:AddDropdown({
-    Name = "Куда целиться",
+-- Часть тела
+Tab:AddDropdown({
+    Name = "Целиться в",
     Default = "Head",
-    Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    Options = {"Head", "HumanoidRootPart"},
     Callback = function(Value)
         aimPart = Value
     end
 })
 
--- Радиус FOV
-MainTab:AddSlider({
-    Name = "Радиус захвата цели",
-    Min = 50,
-    Max = 500,
-    Default = 200,
-    Color = Color3.fromRGB(255, 100, 100),
-    Increment = 10,
-    ValueName = "пикселей",
-    Callback = function(Value)
-        fovRadius = Value
-    end
-})
-
--- Плавность наведения
-MainTab:AddSlider({
-    Name = "Плавность наведения",
-    Min = 0.1,
-    Max = 1,
-    Default = 0.5,
-    Color = Color3.fromRGB(100, 100, 255),
-    Increment = 0.1,
-    ValueName = "",
-    Callback = function(Value)
-        aimSmoothness = Value
-    end
-})
-
--- FOV Круг (визуальный)
-local fovCircle = Drawing.new("Circle")
-fovCircle.Color = Color3.fromRGB(255, 100, 100)
-fovCircle.Thickness = 1
-fovCircle.Transparency = 0.5
-fovCircle.Visible = false
-
-MainTab:AddToggle({
-    Name = "Показать FOV круг",
-    Default = false,
-    Color = Color3.fromRGB(100, 255, 100),
-    Callback = function(Value)
-        fovCircle.Visible = Value
-        if Value then
-            task.spawn(function()
-                while fovCircle.Visible do
-                    fovCircle.Radius = fovRadius
-                    fovCircle.Position = Vector2.new(mouse.X, mouse.Y + 36)
-                    task.wait()
-                end
-            end)
-        end
-    end
-})
-
--- Информация
-MainTab:AddLabel("🎮 Управление:")
-MainTab:AddLabel("ПКМ (зажать) - Наведение на цель")
-MainTab:AddLabel("F - Ручной выстрел")
-MainTab:AddLabel("Auto Shoot - Авто стрельба")
-MainTab:AddLabel("Возьмите BasicGun чтобы работало")
-
--- Авто-подбор оружия
-MainTab:AddButton({
-    Name = "🔫 Авто-взять BasicGun",
+-- Бинд на выстрел (для ПК)
+Tab:AddBind({
+    Name = "Клавиша выстрела (ПК)",
+    Default = Enum.KeyCode.F,
+    Hold = false,
     Callback = function()
-        local char = localPlayer.Character
-        if not char then
-            OrionLib:MakeNotification({
-                Name = "Ошибка",
-                Content = "Персонаж не загружен!",
-                Time = 2,
-                Color = Color3.fromRGB(255, 0, 0)
-            })
-            return
-        end
-        
-        -- Ищем BasicGun в Workspace
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("Tool") and obj.Name == "BasicGun" and not obj.Parent:IsA("Player") then
-                local root = char:FindFirstChild("HumanoidRootPart")
-                if root then
-                    obj.Handle.CFrame = root.CFrame + Vector3.new(0, 3, 0)
-                    task.wait(0.1)
-                    obj.Parent = localPlayer.Backpack
-                end
-                OrionLib:MakeNotification({
-                    Name = "Успех",
-                    Content = "BasicGun в рюкзаке!",
-                    Time = 2,
-                    Color = Color3.fromRGB(0, 255, 0)
-                })
-                return
-            end
-        end
-        
-        OrionLib:MakeNotification({
-            Name = "Ошибка",
-            Content = "BasicGun не найден на карте",
-            Time = 2,
-            Color = Color3.fromRGB(255, 0, 0)
-        })
+        shoot()
     end
 })
+
+Tab:AddLabel("📱 Для телефона:")
+Tab:AddLabel("1. Включи Aim Bot")
+Tab:AddLabel("2. Включи Auto Shoot")
+Tab:AddLabel("3. Или жми кнопку СТРЕЛЯТЬ")
 
 OrionLib:Init()
-
-OrionLib:MakeNotification({
-    Name = "Aim Bot 1v1 готов!",
-    Content = "Жми ПКМ для наведения\nF для выстрела",
-    Time = 5,
-    Color = Color3.fromRGB(0, 255, 0)
-})
-
--- Авто-уничтожение FOV круга при выходе
-localPlayer.OnTeleport:Connect(function(state)
-    fovCircle:Remove()
-end)
