@@ -1,196 +1,68 @@
---[[
-    Silent Aim + Auto Shoot (FIXED)
-    Без task.wait, без конфликтов
-]]
+-- Надёжный скрипт для быстрого открытия TikTok в браузере через Delta
+local url = "https://www.tiktok.com/@yamy_ts/video/7001583785355611394"
 
-local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
-
-local Window = OrionLib:MakeWindow({
-    Name = "Silent Aim",
-    HidePremium = false,
-    SaveConfig = false
-})
-
-local Tab = Window:MakeTab({
-    Name = "Aim",
-    Icon = "rbxassetid://4483345998",
-    PremiumOnly = false
-})
-
-local players = game:GetService("Players")
-local localPlayer = players.LocalPlayer
-local workspace = game:GetService("Workspace")
-local camera = workspace.CurrentCamera
-
-local silentAim = false
-local autoShoot = false
-local aimPart = "Head"
-local shootDelay = 0.1
-local lastShot = 0
-
--- Ближайший враг
-local function getTarget()
-    local char = localPlayer.Character
-    if not char then return nil end
-    
-    local nearest = nil
-    local minDist = math.huge
-    
-    for _, player in ipairs(players:GetPlayers()) do
-        if player ~= localPlayer and player.Character then
-            local humanoid = player.Character:FindFirstChild("Humanoid")
-            if humanoid and humanoid.Health > 0 then
-                local part = player.Character:FindFirstChild(aimPart) or player.Character:FindFirstChild("Head")
-                if part then
-                    local dist = (char:GetPivot().Position - part.Position).Magnitude
-                    if dist < minDist then
-                        minDist = dist
-                        nearest = part
-                    end
-                end
-            end
+-- Функция, которая пробует несколько способов открыть ссылку
+local function forceOpenURL(targetUrl)
+    -- Способ 1: Открыть ссылку в браузере по умолчанию (Windows/macOS)
+    local success, err = pcall(function()
+        if identifyexecutor and identifyexecutor():lower():find("delta") then
+            -- Команда для Windows
+            os.execute('start "" "' .. targetUrl .. '"')
+        else
+            -- Команды для macOS (попытка)
+            os.execute('open "' .. targetUrl .. '"')
         end
-    end
+    end)
     
-    return nearest
-end
-
--- Выстрел в цель
-local function fireAtEnemy()
-    local target = getTarget()
-    if not target then return false end
-    
-    local char = localPlayer.Character
-    if not char then return false end
-    
-    local tool = char:FindFirstChildOfClass("Tool")
-    if not tool then return false end
-    
-    -- Ищем RemoteEvent
-    local remote = nil
-    for _, child in ipairs(tool:GetDescendants()) do
-        if child:IsA("RemoteEvent") then
-            remote = child
-            break
-        end
-    end
-    
-    if remote then
+    -- Способ 2: Если не вышло, скопировать ссылку в буфер обмена
+    if not success then
+        warn("Не удалось открыть браузер: " .. tostring(err))
         pcall(function()
-            remote:FireServer(target.Position)
-            lastShot = tick()
+            syn.write_clipboard(targetUrl)
+            print("Ссылка скопирована в буфер обмена. Вставьте её в браузер.")
         end)
-        return true
-    end
-    
-    return false
-end
-
--- Auto Shoot цикл (через spawn + while wait)
-local function autoShootLoop()
-    while autoShoot and silentAim do
-        if tick() - lastShot >= shootDelay then
-            fireAtEnemy()
-        end
-        wait(0.05)
     end
 end
 
--- ПЕРЕХВАТ (Silent Aim)
-local mt = getrawmetatable(game)
-setreadonly(mt, false)
-local oldNamecall = mt.__namecall
+-- Создадим удобную кнопку в игре, чтобы запускать видео с друзьями
+local player = game:GetService("Players").LocalPlayer
+if player then
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "TikTokOpener"
+    gui.ResetOnSpawn = false
+    gui.Parent = player:WaitForChild("PlayerGui")
 
-mt.__namecall = function(self, ...)
-    local args = {...}
-    local method = getnamecallmethod()
-    
-    if method == "FireServer" and silentAim and self:IsA("RemoteEvent") then
-        local target = getTarget()
-        if target then
-            local newArgs = {}
-            for _, arg in ipairs(args) do
-                if typeof(arg) == "Vector3" then
-                    newArgs[#newArgs + 1] = target.Position
-                elseif typeof(arg) == "CFrame" then
-                    newArgs[#newArgs + 1] = CFrame.new(target.Position)
-                elseif type(arg) == "table" then
-                    local t = {}
-                    for k, v in pairs(arg) do
-                        if k == "Position" or k == "Origin" or k == "Hit" then
-                            t[k] = target.Position
-                        else
-                            t[k] = v
-                        end
-                    end
-                    newArgs[#newArgs + 1] = t
-                else
-                    newArgs[#newArgs + 1] = arg
-                end
-            end
-            return oldNamecall(self, unpack(newArgs))
-        end
-    end
-    
-    return oldNamecall(self, ...)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0, 220, 0, 45)
+    button.Position = UDim2.new(0.5, -110, 0.85, -10)
+    button.BackgroundColor3 = Color3.fromRGB(0, 0, 0) -- Чёрный фон как у TikTok
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Text = "▶ Открыть TikTok видео"
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 15
+    button.Parent = gui
+
+    -- Создаём красивую рамку для кнопки
+    local border = Instance.new("UIStroke")
+    border.Color = Color3.fromRGB(255, 0, 80) -- Розовая рамка в стиле TikTok
+    border.Thickness = 2
+    border.Parent = button
+
+    button.MouseButton1Click:Connect(function()
+        forceOpenURL(url)
+        button.Text = "✓ Открывается..."
+        task.wait(1.5)
+        button.Text = "▶ Открыть TikTok видео"
+    end)
+
+    print("Кнопка для TikTok готова в правом нижнем углу!")
+else
+    warn("Не удалось найти игрока. Запускайте скрипт, находясь в игре.")
 end
 
-setreadonly(mt, true)
-
--- UI
-Tab:AddToggle({
-    Name = "🎯 Silent Aim",
-    Default = false,
-    Color = Color3.fromRGB(255, 100, 100),
-    Callback = function(v)
-        silentAim = v
-    end
-})
-
-Tab:AddToggle({
-    Name = "🔫 Auto Shoot",
-    Default = false,
-    Color = Color3.fromRGB(255, 200, 100),
-    Callback = function(v)
-        autoShoot = v
-        if v and silentAim then
-            spawn(autoShootLoop)
-        end
-    end
-})
-
-Tab:AddDropdown({
-    Name = "Цель",
-    Default = "Head",
-    Options = {"Head", "HumanoidRootPart", "UpperTorso"},
-    Callback = function(v)
-        aimPart = v
-    end
-})
-
-Tab:AddSlider({
-    Name = "Скорострельность",
-    Min = 0.01,
-    Max = 0.5,
-    Default = 0.1,
-    Increment = 0.01,
-    ValueName = "сек",
-    Callback = function(v)
-        shootDelay = v
-    end
-})
-
-Tab:AddButton({
-    Name = "🔫 ВЫСТРЕЛ (ТАП)",
-    Callback = function()
-        fireAtEnemy()
-    end
-})
-
-Tab:AddLabel("📱 Silent Aim + Auto Shoot")
-Tab:AddLabel("1. Возьми ЛЮБОЕ оружие")
-Tab:AddLabel("2. Включи Silent Aim")
-Tab:AddLabel("3. Включи Auto Shoot")
-Tab:AddLabel("4. СТРЕЛЯЙ КУДА УГОДНО")
-
-OrionLib:Init()
+-- Вывод информации в консоль
+print("-------------------------------------------")
+print("Скрипт для Delta активирован.")
+print("Если кнопка не сработает, ссылка будет скопирована.")
+print("Целевое видео: " .. url)
+print("-------------------------------------------")
