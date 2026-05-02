@@ -1,0 +1,530 @@
+--[[
+    Advanced Explorer Scanner with Orion UI
+    Для Delta Executor / Synapse X / KRNL / Script-Ware
+]]
+
+-- Загрузка Orion UI
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
+
+-- Основные переменные
+local Window = OrionLib:MakeWindow({
+    Name = "Explorer Scanner Pro",
+    HidePremium = false,
+    SaveConfig = true,
+    ConfigFolder = "ExplorerScanner"
+})
+
+-- Вкладки
+local MainTab = Window:MakeTab({
+    Name = "Сканер",
+    Icon = "rbxassetid://4483345998",
+    PremiumOnly = false
+})
+
+local ToolsTab = Window:MakeTab({
+    Name = "Инструменты",
+    Icon = "rbxassetid://7733968881",
+    PremiumOnly = false
+})
+
+local SettingsTab = Window:MakeTab({
+    Name = "Настройки",
+    Icon = "rbxassetid://7734056608",
+    PremiumOnly = false
+})
+
+-- Функция глубокого сканирования
+local function scanExplorer()
+    local results = {
+        scripts = {},
+        localScripts = {},
+        modules = {},
+        parts = {},
+        models = {},
+        tools = {},
+        values = {},
+        gui = {},
+        players = {}
+    }
+    
+    local function scanObject(obj, path)
+        path = path .. "." .. obj.Name
+        
+        -- Сбор важных объектов
+        if obj:IsA("Script") then
+            table.insert(results.scripts, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                Disabled = obj.Disabled,
+                Source = obj.Source
+            })
+        elseif obj:IsA("LocalScript") then
+            table.insert(results.localScripts, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                Disabled = obj.Disabled,
+                Source = obj.Source
+            })
+        elseif obj:IsA("ModuleScript") then
+            table.insert(results.modules, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                Source = obj.Source
+            })
+        elseif obj:IsA("BasePart") then
+            table.insert(results.parts, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                Position = obj.Position,
+                Anchored = obj.Anchored,
+                CanCollide = obj.CanCollide,
+                Transparency = obj.Transparency
+            })
+        elseif obj:IsA("Model") then
+            table.insert(results.models, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                PrimaryPart = obj.PrimaryPart and obj.PrimaryPart.Name or "None"
+            })
+        elseif obj:IsA("Tool") then
+            table.insert(results.tools, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                CanBeDropped = obj.CanBeDropped,
+                RequiresHandle = obj.RequiresHandle
+            })
+        elseif obj:IsA("ValueBase") then
+            table.insert(results.values, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                Value = tostring(obj.Value)
+            })
+        elseif obj:IsA("ScreenGui") or obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+            table.insert(results.gui, {
+                Name = obj.Name,
+                Path = path,
+                Class = obj.ClassName,
+                Enabled = obj.Enabled,
+                ResetOnSpawn = obj.ResetOnSpawn
+            })
+        elseif obj:IsA("Player") then
+            if obj ~= game.Players.LocalPlayer then
+                table.insert(results.players, {
+                    Name = obj.Name,
+                    Path = path,
+                    Class = obj.ClassName,
+                    UserId = obj.UserId,
+                    Character = obj.Character and obj.Character.Name or "None"
+                })
+            end
+        end
+        
+        -- Рекурсивное сканирование
+        for _, child in ipairs(obj:GetChildren()) do
+            scanObject(child, path)
+        end
+    end
+    
+    -- Запуск сканирования
+    scanObject(game, "game")
+    
+    return results
+end
+
+-- Создание окна результатов
+local function createResultsWindow(results)
+    local ResultsWindow = OrionLib:MakeWindow({
+        Name = "Результаты сканирования",
+        HidePremium = false,
+        SaveConfig = false
+    })
+    
+    local createListTab = function(name, icon, data, color)
+        local tab = ResultsWindow:MakeTab({Name = name, Icon = icon, PremiumOnly = false})
+        local section = tab:AddSection({Name = "Найдено: " .. #data})
+        
+        for _, item in ipairs(data) do
+            tab:AddButton({
+                Name = item.Path or item.Name,
+                Callback = function()
+                    setclipboard(item.Path or item.Name)
+                    OrionLib:MakeNotification({
+                        Name = "Скопировано",
+                        Content = "Путь скопирован в буфер обмена",
+                        Time = 5,
+                        Color = color
+                    })
+                end
+            })
+        end
+    end
+    
+    createListTab("📜 Scripts", "rbxassetid://7733968881", results.scripts, Color3.fromRGB(255, 100, 100))
+    createListTab("📝 LocalScripts", "rbxassetid://7733968881", results.localScripts, Color3.fromRGB(100, 255, 100))
+    createListTab("📦 Modules", "rbxassetid://7733968881", results.modules, Color3.fromRGB(100, 100, 255))
+    createListTab("🔧 Parts", "rbxassetid://7734056608", results.parts, Color3.fromRGB(255, 255, 100))
+    createListTab("🏗️ Models", "rbxassetid://7734056608", results.models, Color3.fromRGB(255, 200, 100))
+    createListTab("🛠️ Tools", "rbxassetid://7734056608", results.tools, Color3.fromRGB(255, 100, 200))
+    createListTab("📊 Values", "rbxassetid://7734056608", results.values, Color3.fromRGB(100, 255, 200))
+    createListTab("🎨 GUI", "rbxassetid://7734056608", results.gui, Color3.fromRGB(200, 150, 255))
+    createListTab("👤 Players", "rbxassetid://7734056608", results.players, Color3.fromRGB(150, 255, 150))
+end
+
+-- Функция сохранения ВСЕХ данных в файл
+local function saveAllResults(filename)
+    local results = scanExplorer()
+    local HttpService = game:GetService("HttpService")
+    
+    -- Создаем полный дамп всех данных
+    local fullData = {
+        GameName = game.Name or "Unknown",
+        PlaceId = game.PlaceId,
+        ScanTime = os.date("%Y-%m-%d %H:%M:%S"),
+        TotalObjects = {
+            Scripts = #results.scripts,
+            LocalScripts = #results.localScripts,
+            Modules = #results.modules,
+            Parts = #results.parts,
+            Models = #results.models,
+            Tools = #results.tools,
+            Values = #results.values,
+            GUI = #results.gui,
+            Players = #results.players
+        },
+        Scripts = results.scripts,
+        LocalScripts = results.localScripts,
+        Modules = results.modules,
+        Parts = results.parts,
+        Models = results.models,
+        Tools = results.tools,
+        Values = results.values,
+        GUI = results.gui,
+        Players = results.players
+    }
+    
+    -- Сохраняем в JSON
+    local jsonData = HttpService:JSONEncode(fullData)
+    writefile(filename .. ".json", jsonData)
+    
+    -- Также сохраняем в читаемом TXT формате
+    local txtData = "=== EXPLORER SCAN RESULTS ===\n"
+    txtData = txtData .. "Game: " .. (game.Name or "Unknown") .. "\n"
+    txtData = txtData .. "Place ID: " .. game.PlaceId .. "\n"
+    txtData = txtData .. "Scan Time: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n"
+    txtData = txtData .. "================================\n\n"
+    
+    -- Scripts
+    txtData = txtData .. "=== SCRIPTS (" .. #results.scripts .. ") ===\n"
+    for i, script in ipairs(results.scripts) do
+        txtData = txtData .. i .. ". " .. script.Path .. "\n"
+        txtData = txtData .. "   Disabled: " .. tostring(script.Disabled) .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- LocalScripts
+    txtData = txtData .. "=== LOCAL SCRIPTS (" .. #results.localScripts .. ") ===\n"
+    for i, script in ipairs(results.localScripts) do
+        txtData = txtData .. i .. ". " .. script.Path .. "\n"
+        txtData = txtData .. "   Disabled: " .. tostring(script.Disabled) .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- Modules
+    txtData = txtData .. "=== MODULES (" .. #results.modules .. ") ===\n"
+    for i, module in ipairs(results.modules) do
+        txtData = txtData .. i .. ". " .. module.Path .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- Parts
+    txtData = txtData .. "=== PARTS (" .. #results.parts .. ") ===\n"
+    for i, part in ipairs(results.parts) do
+        txtData = txtData .. i .. ". " .. part.Path .. "\n"
+        txtData = txtData .. "   Anchored: " .. tostring(part.Anchored) .. "\n"
+        txtData = txtData .. "   CanCollide: " .. tostring(part.CanCollide) .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- Models
+    txtData = txtData .. "=== MODELS (" .. #results.models .. ") ===\n"
+    for i, model in ipairs(results.models) do
+        txtData = txtData .. i .. ". " .. model.Path .. "\n"
+        txtData = txtData .. "   PrimaryPart: " .. model.PrimaryPart .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- Tools
+    txtData = txtData .. "=== TOOLS (" .. #results.tools .. ") ===\n"
+    for i, tool in ipairs(results.tools) do
+        txtData = txtData .. i .. ". " .. tool.Path .. "\n"
+        txtData = txtData .. "   CanBeDropped: " .. tostring(tool.CanBeDropped) .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- Values
+    txtData = txtData .. "=== VALUES (" .. #results.values .. ") ===\n"
+    for i, value in ipairs(results.values) do
+        txtData = txtData .. i .. ". " .. value.Path .. "\n"
+        txtData = txtData .. "   Value: " .. value.Value .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- GUI
+    txtData = txtData .. "=== GUI (" .. #results.gui .. ") ===\n"
+    for i, gui in ipairs(results.gui) do
+        txtData = txtData .. i .. ". " .. gui.Path .. "\n"
+        txtData = txtData .. "   Enabled: " .. tostring(gui.Enabled) .. "\n"
+    end
+    txtData = txtData .. "\n"
+    
+    -- Players
+    txtData = txtData .. "=== PLAYERS (" .. #results.players .. ") ===\n"
+    for i, player in ipairs(results.players) do
+        txtData = txtData .. i .. ". " .. player.Path .. "\n"
+        txtData = txtData .. "   UserId: " .. player.UserId .. "\n"
+    end
+    
+    writefile(filename .. ".txt", txtData)
+    
+    return filename
+end
+
+-- Кнопка полного сканирования
+MainTab:AddButton({
+    Name = "🔍 Начать полное сканирование",
+    Callback = function()
+        OrionLib:MakeNotification({
+            Name = "Сканирование",
+            Content = "Начинаю сканирование... Это может занять несколько секунд.",
+            Time = 3,
+            Color = Color3.fromRGB(255, 255, 255)
+        })
+        
+        wait(0.5)
+        local results = scanExplorer()
+        
+        OrionLib:MakeNotification({
+            Name = "Готово!",
+            Content = string.format("Найдено: %d важных объектов", 
+                #results.scripts + #results.localScripts + #results.parts + #results.models + #results.tools),
+            Time = 5,
+            Color = Color3.fromRGB(0, 255, 0)
+        })
+        
+        createResultsWindow(results)
+    end
+})
+
+-- Быстрое сканирование
+MainTab:AddButton({
+    Name = "⚡ Быстрое сканирование (только скрипты)",
+    Callback = function()
+        local results = {scripts = {}}
+        local function quickScan(obj)
+            if obj:IsA("Script") or obj:IsA("LocalScript") then
+                table.insert(results.scripts, obj)
+            end
+            for _, child in ipairs(obj:GetChildren()) do
+                quickScan(child)
+            end
+        end
+        
+        quickScan(game)
+        OrionLib:MakeNotification({
+            Name = "Найдено скриптов",
+            Content = #results.scripts .. " штук",
+            Time = 3,
+            Color = Color3.fromRGB(255, 255, 0)
+        })
+    end
+})
+
+-- Экспорт ВСЕХ данных
+MainTab:AddTextbox({
+    Name = "💾 Сохранить ВСЁ в файл",
+    Default = "",
+    TextDisappear = "Введите имя файла",
+    Callback = function(filename)
+        if filename ~= "" then
+            OrionLib:MakeNotification({
+                Name = "Сохранение",
+                Content = "Сканирую и сохраняю все данные...",
+                Time = 3,
+                Color = Color3.fromRGB(255, 255, 255)
+            })
+            
+            wait(0.5)
+            local savedName = saveAllResults(filename)
+            
+            OrionLib:MakeNotification({
+                Name = "✅ Сохранено!",
+                Content = "Все данные сохранены в:\n" .. savedName .. ".json\n" .. savedName .. ".txt",
+                Time = 5,
+                Color = Color3.fromRGB(0, 255, 0)
+            })
+        end
+    end
+})
+
+-- Кнопка быстрого сохранения с авто-именем
+MainTab:AddButton({
+    Name = "💾 Быстрое сохранение (авто-имя)",
+    Callback = function()
+        local autoName = "scan_" .. game.PlaceId .. "_" .. os.date("%Y%m%d_%H%M%S")
+        local savedName = saveAllResults(autoName)
+        
+        OrionLib:MakeNotification({
+            Name = "✅ Сохранено!",
+            Content = "Сохранено как: " .. savedName,
+            Time = 5,
+            Color = Color3.fromRGB(0, 255, 0)
+        })
+    end
+})
+
+-- Инструменты: Подсветка
+ToolsTab:AddButton({
+    Name = "🎯 Подсветить важные объекты",
+    Callback = function()
+        local results = scanExplorer()
+        local highlight = Instance.new("Highlight")
+        highlight.FillColor = Color3.fromRGB(255, 0, 0)
+        highlight.FillTransparency = 0.5
+        
+        for _, partData in ipairs(results.parts) do
+            local clone = highlight:Clone()
+            clone.Parent = partData.Object
+            game.Debris:AddItem(clone, 30)
+        end
+    end
+})
+
+-- Инструменты: Копирование
+ToolsTab:AddButton({
+    Name = "📋 Копировать все пути скриптов",
+    Callback = function()
+        local results = scanExplorer()
+        local allPaths = ""
+        for _, scriptData in ipairs(results.scripts) do
+            allPaths = allPaths .. scriptData.Path .. "\n"
+        end
+        setclipboard(allPaths)
+        OrionLib:MakeNotification({
+            Name = "Скопировано!",
+            Content = "Все пути скриптов скопированы",
+            Time = 3,
+            Color = Color3.fromRGB(0, 255, 0)
+        })
+    end
+})
+
+-- Инструменты: Копировать ВСЕ пути
+ToolsTab:AddButton({
+    Name = "📋 Копировать ВСЕ пути",
+    Callback = function()
+        local results = scanExplorer()
+        local allPaths = "=== ВСЕ НАЙДЕННЫЕ ОБЪЕКТЫ ===\n\n"
+        
+        for category, items in pairs(results) do
+            if #items > 0 then
+                allPaths = allPaths .. "--- " .. string.upper(category) .. " ---\n"
+                for _, item in ipairs(items) do
+                    allPaths = allPaths .. item.Path .. "\n"
+                end
+                allPaths = allPaths .. "\n"
+            end
+        end
+        
+        setclipboard(allPaths)
+        OrionLib:MakeNotification({
+            Name = "Скопировано!",
+            Content = "Все пути скопированы в буфер обмена",
+            Time = 3,
+            Color = Color3.fromRGB(0, 255, 0)
+        })
+    end
+})
+
+-- Настройки: Глубина
+local scanDepth = 10
+SettingsTab:AddSlider({
+    Name = "Глубина сканирования",
+    Min = 1,
+    Max = 20,
+    Default = 10,
+    Color = Color3.fromRGB(255, 100, 100),
+    Increment = 1,
+    ValueName = "уровней",
+    Callback = function(Value)
+        scanDepth = Value
+    end
+})
+
+-- Настройки: Информация
+SettingsTab:AddLabel("💡 Использование:")
+SettingsTab:AddLabel("1. Нажмите 'Полное сканирование'")
+SettingsTab:AddLabel("2. Изучите результаты по категориям")
+SettingsTab:AddLabel("3. Кликните на путь для копирования")
+SettingsTab:AddLabel("4. Сохраните всё в файл")
+
+-- Поиск по имени
+MainTab:AddTextbox({
+    Name = "Поиск по имени",
+    Default = "",
+    TextDisappear = "Введите имя объекта",
+    Callback = function(searchTerm)
+        if searchTerm ~= "" then
+            local results = scanExplorer()
+            local found = {}
+            
+            -- Поиск во всех категориях
+            for category, items in pairs(results) do
+                for _, item in ipairs(items) do
+                    if string.find(string.lower(item.Name), string.lower(searchTerm)) then
+                        table.insert(found, item.Path)
+                    end
+                end
+            end
+            
+            if #found > 0 then
+                local msg = "Найдено: " .. #found .. " объектов\n" .. table.concat(found, "\n", 1, math.min(5, #found))
+                if #found > 5 then
+                    msg = msg .. "\n... и еще " .. (#found - 5) .. " объектов"
+                end
+                OrionLib:MakeNotification({
+                    Name = "Результаты поиска",
+                    Content = msg,
+                    Time = 10,
+                    Color = Color3.fromRGB(100, 255, 100)
+                })
+            else
+                OrionLib:MakeNotification({
+                    Name = "Не найдено",
+                    Content = "Объекты с именем '" .. searchTerm .. "' не найдены",
+                    Time = 3,
+                    Color = Color3.fromRGB(255, 100, 100)
+                })
+            end
+        end
+    end
+})
+
+-- Инициализация Orion
+OrionLib:Init()
+
+-- Авто-уведомление о загрузке
+OrionLib:MakeNotification({
+    Name = "Explorer Scanner Pro",
+    Content = "Скрипт загружен! Сохраняет ВСЕ данные в JSON и TXT.",
+    Time = 5,
+    Color = Color3.fromRGB(0, 255, 0)
+})
+
+print("Explorer Scanner Pro loaded successfully!")
