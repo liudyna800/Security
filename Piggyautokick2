@@ -1,12 +1,12 @@
 --[[
-    Universal Silent Aim Bot (Auto Detect RemoteEvent)
-    Сам находит нужный RemoteEvent для выстрела
+    Silent Aim Bot FIXED
+    Перехватывает Fire/FireWeapon/RemoteEvent для ВСЕХ оружий
 ]]
 
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 
 local Window = OrionLib:MakeWindow({
-    Name = "Universal Silent Aim",
+    Name = "Silent Aim FIXED",
     HidePremium = false,
     SaveConfig = false
 })
@@ -22,33 +22,33 @@ local workspace = game:GetService("Workspace")
 local localPlayer = players.LocalPlayer
 local RunService = game:GetService("RunService")
 
--- Переменные
+-- Состояния
 local silentAim = false
-local autoShootEnabled = false
+local autoShoot = false
 local aimPart = "Head"
-local detectedRemote = nil
-local detectedRemoteName = "Не найден"
+local shootDelay = 0.1
+local lastShot = 0
 
--- Функция поиска RemoteEvent в оружии
-local function findFireRemote()
+-- Получаем ВСЕ RemoteEvent из оружия в руках
+local function getAllRemotes()
     local char = localPlayer.Character
-    if not char then return nil end
+    if not char then return {} end
     
     local tool = char:FindFirstChildOfClass("Tool")
-    if not tool then return nil end
+    if not tool then return {} end
     
-    -- Ищем все RemoteEvent в оружии
+    local remotes = {}
     for _, child in ipairs(tool:GetDescendants()) do
         if child:IsA("RemoteEvent") then
-            return child
+            table.insert(remotes, child)
         end
     end
     
-    return nil
+    return remotes
 end
 
 -- Поиск ближайшего врага
-local function getNearestEnemy()
+local function getNearestEnemyPart()
     local char = localPlayer.Character
     if not char then return nil end
     local myRoot = char:FindFirstChild("HumanoidRootPart")
@@ -59,20 +59,19 @@ local function getNearestEnemy()
     
     for _, player in ipairs(players:GetPlayers()) do
         if player ~= localPlayer and player.Character then
-            local targetChar = player.Character
-            local humanoid = targetChar:FindFirstChild("Humanoid")
+            local humanoid = player.Character:FindFirstChild("Humanoid")
             
             if humanoid and humanoid.Health > 0 then
-                local targetPart = targetChar:FindFirstChild(aimPart)
-                if not targetPart then
-                    targetPart = targetChar:FindFirstChild("Head")
+                local part = player.Character:FindFirstChild(aimPart)
+                if not part then
+                    part = player.Character:FindFirstChild("Head")
                 end
                 
-                if targetPart then
-                    local dist = (myRoot.Position - targetPart.Position).Magnitude
+                if part then
+                    local dist = (myRoot.Position - part.Position).Magnitude
                     if dist < minDist then
                         minDist = dist
-                        nearest = targetPart
+                        nearest = part
                     end
                 end
             end
@@ -82,7 +81,33 @@ local function getNearestEnemy()
     return nearest
 end
 
--- Перехват FireServer (Silent Aim)
+-- Функция выстрела с подменой позиции
+local function shootAtEnemy()
+    local target = getNearestEnemyPart()
+    if not target then return false end
+    
+    local remotes = getAllRemotes()
+    if #remotes == 0 then return false end
+    
+    -- Отправляем через все найденные RemoteEvent
+    for _, remote in ipairs(remotes) do
+        pcall(function()
+            -- Пробуем разные форматы аргументов
+            remote:FireServer(target.Position)
+        end)
+        pcall(function()
+            remote:FireServer(target.Position, target)
+        end)
+        pcall(function()
+            remote:FireServer({Position = target.Position, Hit = target.Position, Origin = target.Position})
+        end)
+    end
+    
+    lastShot = tick()
+    return true
+end
+
+-- Перехват FireServer для Silent Aim
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
     local method = getnamecallmethod()
@@ -90,32 +115,35 @@ oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
     
     if method == "FireServer" and silentAim then
         if self:IsA("RemoteEvent") then
-            local target = getNearestEnemy()
-            if target then
-                -- Подменяем позицию на врага
-                local newArgs = {}
-                for _, arg in ipairs(args) do
-                    if typeof(arg) == "Vector3" then
-                        newArgs[#newArgs + 1] = target.Position
-                    elseif typeof(arg) == "CFrame" then
-                        newArgs[#newArgs + 1] = CFrame.new(target.Position)
-                    elseif type(arg) == "table" then
-                        local newTable = {}
-                        for k, v in pairs(arg) do
-                            if k == "Position" or k == "Origin" or k == "Hit" or k == "lookVector" then
-                                newTable[k] = target.Position
-                            elseif k == "Direction" then
-                                newTable[k] = (target.Position - workspace.CurrentCamera.CFrame.Position).Unit
-                            else
-                                newTable[k] = v
+            local remoteName = self.Name
+            -- Проверяем что это оружейный RemoteEvent
+            if remoteName == "Fire" or remoteName == "FireWeapon" or remoteName == "RemoteEvent" then
+                local target = getNearestEnemyPart()
+                if target then
+                    local newArgs = {}
+                    for _, arg in ipairs(args) do
+                        if typeof(arg) == "Vector3" then
+                            newArgs[#newArgs + 1] = target.Position
+                        elseif typeof(arg) == "CFrame" then
+                            newArgs[#newArgs + 1] = CFrame.new(target.Position)
+                        elseif type(arg) == "table" then
+                            local t = {}
+                            for k, v in pairs(arg) do
+                                if k == "Position" or k == "Origin" or k == "Hit" then
+                                    t[k] = target.Position
+                                elseif k == "Direction" then
+                                    t[k] = (target.Position - workspace.CurrentCamera.CFrame.Position).Unit
+                                else
+                                    t[k] = v
+                                end
                             end
+                            newArgs[#newArgs + 1] = t
+                        else
+                            newArgs[#newArgs + 1] = arg
                         end
-                        newArgs[#newArgs + 1] = newTable
-                    else
-                        newArgs[#newArgs + 1] = arg
                     end
+                    return oldNamecall(self, unpack(newArgs))
                 end
-                return oldNamecall(self, unpack(newArgs))
             end
         end
     end
@@ -125,45 +153,18 @@ end)
 
 -- Авто-шут цикл
 local function autoShootLoop()
-    while autoShootEnabled and silentAim do
-        local char = localPlayer.Character
-        if char then
-            local tool = char:FindFirstChildOfClass("Tool")
-            if tool then
-                -- Активируем оружие
-                local remote = findFireRemote()
-                if remote then
-                    pcall(function()
-                        remote:FireServer(Vector3.new(0, 0, 0))
-                    end)
-                else
-                    -- Альтернативный метод: Activate
-                    pcall(function()
-                        tool:Activate()
-                        task.wait(0.05)
-                        tool:Deactivate()
-                    end)
+    while autoShoot and silentAim do
+        if tick() - lastShot >= shootDelay then
+            local char = localPlayer.Character
+            if char then
+                local tool = char:FindFirstChildOfClass("Tool")
+                if tool then
+                    shootAtEnemy()
                 end
             end
         end
-        task.wait(0.12)
+        task.wait(0.05)
     end
-end
-
--- Сканер всех RemoteEvent в игре
-local function scanAllRemotes()
-    local found = {}
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("RemoteEvent") then
-            table.insert(found, obj:GetFullName())
-        end
-    end
-    for _, obj in ipairs(game.ReplicatedStorage:GetDescendants()) do
-        if obj:IsA("RemoteEvent") then
-            table.insert(found, obj:GetFullName())
-        end
-    end
-    return found
 end
 
 -- UI
@@ -176,16 +177,9 @@ Tab:AddToggle({
         if Value then
             OrionLib:MakeNotification({
                 Name = "Silent Aim",
-                Content = "✅ Пули летят в голову врага!",
+                Content = "✅ Включен! Пули летят во врага",
                 Time = 3,
                 Color = Color3.fromRGB(0, 255, 0)
-            })
-        else
-            OrionLib:MakeNotification({
-                Name = "Silent Aim",
-                Content = "❌ Выключен",
-                Time = 2,
-                Color = Color3.fromRGB(255, 0, 0)
             })
         end
     end
@@ -196,7 +190,7 @@ Tab:AddToggle({
     Default = false,
     Color = Color3.fromRGB(255, 200, 100),
     Callback = function(Value)
-        autoShootEnabled = Value
+        autoShoot = Value
         if Value and silentAim then
             task.spawn(autoShootLoop)
         end
@@ -204,76 +198,76 @@ Tab:AddToggle({
 })
 
 Tab:AddDropdown({
-    Name = "Целиться в",
+    Name = "Куда стрелять",
     Default = "Head",
-    Options = {"Head", "HumanoidRootPart", "UpperTorso"},
+    Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
     Callback = function(Value)
         aimPart = Value
     end
 })
 
--- Кнопка выстрела (тап)
+Tab:AddSlider({
+    Name = "Скорость стрельбы",
+    Min = 0.05,
+    Max = 0.5,
+    Default = 0.1,
+    Color = Color3.fromRGB(100, 255, 100),
+    Increment = 0.05,
+    ValueName = "сек",
+    Callback = function(Value)
+        shootDelay = Value
+    end
+})
+
+-- Кнопка ВЫСТРЕЛ для телефона
 Tab:AddButton({
     Name = "🔫 ВЫСТРЕЛ (ТАП)",
     Callback = function()
-        local char = localPlayer.Character
-        if char then
-            local tool = char:FindFirstChildOfClass("Tool")
-            if tool then
-                local remote = findFireRemote()
-                if remote then
-                    pcall(function()
-                        remote:FireServer(Vector3.new(0, 0, 0))
-                    end)
-                    OrionLib:MakeNotification({
-                        Name = "Выстрел!",
-                        Content = "Пуля в " .. #players:GetPlayers() - 1 .. " врага(ов)",
-                        Time = 1,
-                        Color = Color3.fromRGB(255, 255, 0)
-                    })
-                else
-                    OrionLib:MakeNotification({
-                        Name = "Ошибка",
-                        Content = "RemoteEvent не найден в оружии!",
-                        Time = 2,
-                        Color = Color3.fromRGB(255, 0, 0)
-                    })
-                end
-            end
+        local success = shootAtEnemy()
+        if success then
+            OrionLib:MakeNotification({
+                Name = "Выстрел!",
+                Content = "Пуля летит во врага!",
+                Time = 1,
+                Color = Color3.fromRGB(255, 255, 0)
+            })
+        else
+            OrionLib:MakeNotification({
+                Name = "Не вышло",
+                Content = "Нет оружия или врага рядом",
+                Time = 1,
+                Color = Color3.fromRGB(255, 100, 100)
+            })
         end
     end
 })
 
--- Сканер RemoteEvent
+-- Test: Показать что найдено
 Tab:AddButton({
-    Name = "🔍 Сканировать RemoteEvent",
+    Name = "🔍 Показать оружие в руках",
     Callback = function()
-        local remotes = scanAllRemotes()
-        local text = "Найдено RemoteEvent: " .. #remotes .. "\n\n"
-        for i, name in ipairs(remotes) do
-            text = text .. i .. ". " .. name .. "\n"
+        local remotes = getAllRemotes()
+        local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+        
+        local msg = "Оружие: " .. (tool and tool.Name or "НЕТ") .. "\n"
+        msg = msg .. "RemoteEvent найдено: " .. #remotes .. "\n"
+        for i, r in ipairs(remotes) do
+            msg = msg .. i .. ". " .. r.Name .. "\n"
         end
-        writefile("remotes_scan.txt", text)
+        
         OrionLib:MakeNotification({
-            Name = "Сканирование",
-            Content = "Найдено " .. #remotes .. " RemoteEvent\nСохранено в remotes_scan.txt",
+            Name = "Инфо",
+            Content = msg,
             Time = 5,
-            Color = Color3.fromRGB(0, 255, 0)
+            Color = Color3.fromRGB(100, 100, 255)
         })
     end
 })
 
-Tab:AddLabel("📱 Инструкция:")
-Tab:AddLabel("1. Включи Silent Aim")
-Tab:AddLabel("2. Включи Auto Shoot")
-Tab:AddLabel("3. Пули летят во врага!")
+Tab:AddLabel("📱 Как использовать:")
+Tab:AddLabel("1. Возьми ЛЮБОЕ оружие")
+Tab:AddLabel("2. Включи Silent Aim")
+Tab:AddLabel("3. Включи Auto Shoot")
 Tab:AddLabel("4. Или тапай кнопку ВЫСТРЕЛ")
 
 OrionLib:Init()
-
-OrionLib:MakeNotification({
-    Name = "Universal Aim готов!",
-    Content = "Включай и стреляй!",
-    Time = 5,
-    Color = Color3.fromRGB(0, 255, 0)
-})
