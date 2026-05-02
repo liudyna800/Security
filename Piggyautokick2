@@ -1,222 +1,367 @@
 --[[
-    Explorer Scanner LITE - Оптимизированная версия
-    Без зависаний, только сохранение в файл
+    Aim Bot для 1v1 PvP (MM2 Style)
+    Работает с BasicGun
 ]]
 
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Qanuir/orion-ui/refs/heads/main/source.lua"))()
 
 local Window = OrionLib:MakeWindow({
-    Name = "Explorer Scanner Lite",
+    Name = "Aim Bot 1v1",
     HidePremium = false,
-    SaveConfig = false
+    SaveConfig = true,
+    ConfigFolder = "AimBot1v1"
 })
 
-local Tab = Window:MakeTab({
-    Name = "Сканер",
+local MainTab = Window:MakeTab({
+    Name = "Aim Bot",
     Icon = "rbxassetid://4483345998",
     PremiumOnly = false
 })
 
--- Быстрое сканирование без зависаний
-local function fastScan()
-    local results = {
-        scripts = {},
-        localScripts = {},
-        modules = {},
-        remoteEvents = {},
-        remoteFunctions = {},
-        parts = {},
-        models = {},
-        tools = {},
-        values = {},
-        guis = {}
-    }
+local players = game:GetService("Players")
+local workspace = game:GetService("Workspace")
+local localPlayer = players.LocalPlayer
+local mouse = localPlayer:GetMouse()
+
+-- Переменные
+local aimEnabled = false
+local aimKey = Enum.UserInputType.MouseButton2 -- ПКМ по умолчанию
+local fovRadius = 200
+local aimSmoothness = 1
+local aimPart = "Head" -- Куда целиться
+local autoShoot = false
+
+-- Функция получения оружия
+local function getCurrentGun()
+    local char = localPlayer.Character
+    if not char then return nil end
     
-    -- Сканируем только важное, не глубже 5 уровней
-    local function scan(obj, depth)
-        if depth > 5 then return end
-        
-        local class = obj.ClassName
-        
-        if class == "Script" then
-            table.insert(results.scripts, obj:GetFullName())
-        elseif class == "LocalScript" then
-            table.insert(results.localScripts, obj:GetFullName())
-        elseif class == "ModuleScript" then
-            table.insert(results.modules, obj:GetFullName())
-        elseif class == "RemoteEvent" then
-            table.insert(results.remoteEvents, obj:GetFullName())
-        elseif class == "RemoteFunction" then
-            table.insert(results.remoteFunctions, obj:GetFullName())
-        elseif class == "Tool" then
-            table.insert(results.tools, obj:GetFullName())
-        elseif class == "ScreenGui" or class == "BillboardGui" then
-            table.insert(results.guis, obj:GetFullName())
-        end
-        
-        for _, child in ipairs(obj:GetChildren()) do
-            scan(child, depth + 1)
+    -- Ищем BasicGun в персонаже
+    for _, tool in ipairs(char:GetChildren()) do
+        if tool:IsA("Tool") and tool.Name == "BasicGun" then
+            return tool
         end
     end
     
-    scan(game, 1)
-    return results
+    -- Ищем в Backpack
+    local backpack = localPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and tool.Name == "BasicGun" then
+                return tool
+            end
+        end
+    end
+    
+    return nil
 end
 
--- Сохранение в файл
-local function saveToFile()
-    local results = fastScan()
-    local text = "=== EXPLORER SCAN RESULTS ===\n"
-    text = text .. "Game: " .. game.Name .. "\n"
-    text = text .. "Place ID: " .. game.PlaceId .. "\n"
-    text = text .. "Time: " .. os.date() .. "\n\n"
+-- Функция выстрела
+local function shoot()
+    local gun = getCurrentGun()
+    if not gun then return end
     
-    local function addCategory(name, items)
-        text = text .. "=== " .. name .. " (" .. #items .. ") ===\n"
-        for i, item in ipairs(items) do
-            text = text .. i .. ". " .. item .. "\n"
-        end
-        text = text .. "\n"
+    -- Через RemoteEvent Fire
+    local fireEvent = gun:FindFirstChild("Fire")
+    if fireEvent and fireEvent:IsA("RemoteEvent") then
+        fireEvent:FireServer()
+        return true
     end
     
-    addCategory("SCRIPTS", results.scripts)
-    addCategory("LOCAL SCRIPTS", results.localScripts)
-    addCategory("MODULES", results.modules)
-    addCategory("REMOTE EVENTS", results.remoteEvents)
-    addCategory("REMOTE FUNCTIONS", results.remoteFunctions)
-    addCategory("TOOLS", results.tools)
-    addCategory("GUIS", results.guis)
+    -- Через FireWeapon
+    local fireWeaponEvent = gun:FindFirstChild("FireWeapon")
+    if fireWeaponEvent and fireWeaponEvent:IsA("RemoteEvent") then
+        fireWeaponEvent:FireServer()
+        return true
+    end
     
-    local filename = "scan_" .. game.PlaceId .. ".txt"
-    writefile(filename, text)
+    -- Через RemoteEvent
+    for _, child in ipairs(gun:GetChildren()) do
+        if child:IsA("RemoteEvent") then
+            child:FireServer()
+            return true
+        end
+    end
     
-    return filename, results
+    return false
 end
 
--- Кнопка сканирования и сохранения
-Tab:AddButton({
-    Name = "🔍 Сканировать и сохранить в файл",
-    Callback = function()
-        OrionLib:MakeNotification({
-            Name = "Сканирование",
-            Content = "Сканирую... Без зависаний!",
-            Time = 2,
-            Color = Color3.fromRGB(255, 255, 255)
-        })
-        
-        wait(0.3)
-        local filename, results = saveToFile()
-        
-        local total = #results.scripts + #results.localScripts + #results.modules + 
-                      #results.remoteEvents + #results.remoteFunctions + #results.tools + #results.guis
-        
-        OrionLib:MakeNotification({
-            Name = "✅ Готово!",
-            Content = "Найдено: " .. total .. " объектов\nСохранено в: " .. filename,
-            Time = 5,
-            Color = Color3.fromRGB(0, 255, 0)
-        })
-    end
-})
-
--- Только подсчёт
-Tab:AddButton({
-    Name = "📊 Быстрый подсчёт объектов",
-    Callback = function()
-        local results = fastScan()
-        
-        local msg = "📜 Scripts: " .. #results.scripts .. "\n"
-        msg = msg .. "📝 LocalScripts: " .. #results.localScripts .. "\n"
-        msg = msg .. "📦 Modules: " .. #results.modules .. "\n"
-        msg = msg .. "📡 RemoteEvents: " .. #results.remoteEvents .. "\n"
-        msg = msg .. "📡 RemoteFunctions: " .. #results.remoteFunctions .. "\n"
-        msg = msg .. "🛠️ Tools: " .. #results.tools .. "\n"
-        msg = msg .. "🎨 GUIs: " .. #results.guis
-        
-        OrionLib:MakeNotification({
-            Name = "Статистика",
-            Content = msg,
-            Time = 5,
-            Color = Color3.fromRGB(100, 255, 100)
-        })
-    end
-})
-
--- Поиск конкретного скрипта
-Tab:AddTextbox({
-    Name = "Поиск скрипта по имени",
-    Default = "",
-    TextDisappear = "Имя скрипта...",
-    Callback = function(name)
-        if name ~= "" then
-            local results = fastScan()
-            local found = {}
+-- Функция поиска ближайшего врага
+local function getClosestEnemy()
+    local closest = nil
+    local shortestDistance = fovRadius
+    
+    local char = localPlayer.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    
+    for _, player in ipairs(players:GetPlayers()) do
+        if player ~= localPlayer and player.Character then
+            local targetChar = player.Character
+            local targetHumanoid = targetChar:FindFirstChild("Humanoid")
             
-            local allScripts = {}
-            for _, cat in ipairs({results.scripts, results.localScripts, results.modules}) do
-                for _, path in ipairs(cat) do
-                    table.insert(allScripts, path)
+            -- Проверка жив ли игрок
+            if targetHumanoid and targetHumanoid.Health > 0 then
+                local targetPart = targetChar:FindFirstChild(aimPart)
+                if not targetPart then
+                    targetPart = targetChar:FindFirstChild("Head") -- Фолбек на голову
                 end
-            end
-            
-            for _, path in ipairs(allScripts) do
-                if string.find(string.lower(path), string.lower(name)) then
-                    table.insert(found, path)
+                
+                if targetPart then
+                    local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(targetPart.Position)
+                    
+                    if onScreen then
+                        local distance = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude
+                        
+                        if distance < shortestDistance then
+                            shortestDistance = distance
+                            closest = {
+                                player = player,
+                                part = targetPart,
+                                position = targetPart.Position,
+                                screenPos = screenPos
+                            }
+                        end
+                    end
                 end
-            end
-            
-            if #found > 0 then
-                setclipboard(table.concat(found, "\n"))
-                OrionLib:MakeNotification({
-                    Name = "Найдено: " .. #found,
-                    Content = "Скопированы в буфер обмена",
-                    Time = 3,
-                    Color = Color3.fromRGB(0, 255, 0)
-                })
-            else
-                OrionLib:MakeNotification({
-                    Name = "Не найдено",
-                    Content = "Ничего не найдено по запросу: " .. name,
-                    Time = 3,
-                    Color = Color3.fromRGB(255, 100, 100)
-                })
             end
         end
     end
-})
+    
+    return closest
+end
 
--- Копировать все пути
-Tab:AddButton({
-    Name = "📋 Копировать все пути скриптов",
-    Callback = function()
-        local results = fastScan()
-        local all = {}
-        
-        for _, cat in ipairs({results.scripts, results.localScripts, results.modules, 
-                              results.remoteEvents, results.remoteFunctions}) do
-            for _, path in ipairs(cat) do
-                table.insert(all, path)
+-- Основной цикл аимбота
+local function aimBotLoop()
+    while aimEnabled do
+        if autoShoot then
+            local target = getClosestEnemy()
+            if target then
+                -- Наводим камеру
+                workspace.CurrentCamera.CFrame = CFrame.new(
+                    workspace.CurrentCamera.CFrame.Position,
+                    target.position
+                )
+                
+                -- Стреляем
+                shoot()
+            end
+        else
+            -- Режим зажатия кнопки
+            if mouse.Button2Down or (aimKey == Enum.UserInputType.MouseButton1 and mouse.Button1Down) then
+                local target = getClosestEnemy()
+                if target then
+                    -- Плавное наведение
+                    local targetCFrame = CFrame.new(
+                        workspace.CurrentCamera.CFrame.Position,
+                        target.position
+                    )
+                    workspace.CurrentCamera.CFrame = workspace.CurrentCamera.CFrame:Lerp(targetCFrame, aimSmoothness)
+                    
+                    -- Авто выстрел
+                    if autoShoot then
+                        shoot()
+                    end
+                end
             end
         end
         
-        setclipboard(table.concat(all, "\n"))
+        task.wait()
+    end
+end
+
+-- Запуск аимбота
+local function startAimBot()
+    if not aimEnabled then
+        aimEnabled = true
+        task.spawn(aimBotLoop)
         OrionLib:MakeNotification({
-            Name = "Скопировано!",
-            Content = #all .. " скриптов/событий в буфере",
+            Name = "Aim Bot",
+            Content = "✅ Aim Bot включён!",
             Time = 3,
             Color = Color3.fromRGB(0, 255, 0)
         })
     end
+end
+
+-- Остановка аимбота
+local function stopAimBot()
+    aimEnabled = false
+    OrionLib:MakeNotification({
+        Name = "Aim Bot",
+        Content = "❌ Aim Bot выключен!",
+        Time = 3,
+        Color = Color3.fromRGB(255, 0, 0)
+    })
+end
+
+-- Тоггл аимбота
+MainTab:AddToggle({
+    Name = "🎯 Aim Bot",
+    Default = false,
+    Color = Color3.fromRGB(255, 100, 100),
+    Callback = function(Value)
+        if Value then
+            startAimBot()
+        else
+            stopAimBot()
+        end
+    end
 })
 
-Tab:AddLabel("💡 Работает быстро, без лагов")
-Tab:AddLabel("Результаты в папке workspace")
+-- Режим Auto Shoot
+MainTab:AddToggle({
+    Name = "🔫 Auto Shoot (авто-стрельба)",
+    Default = false,
+    Color = Color3.fromRGB(255, 200, 100),
+    Callback = function(Value)
+        autoShoot = Value
+    end
+})
+
+-- Кнопка для ручного выстрела
+MainTab:AddBind({
+    Name = "🔥 Клавиша выстрела",
+    Default = Enum.KeyCode.F,
+    Hold = false,
+    Callback = function()
+        if shoot() then
+            print("Выстрел!")
+        else
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Оружие не найдено! Возьмите BasicGun",
+                Time = 2,
+                Color = Color3.fromRGB(255, 100, 100)
+            })
+        end
+    end
+})
+
+-- Часть тела для наведения
+local partDropdown = MainTab:AddDropdown({
+    Name = "Куда целиться",
+    Default = "Head",
+    Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    Callback = function(Value)
+        aimPart = Value
+    end
+})
+
+-- Радиус FOV
+MainTab:AddSlider({
+    Name = "Радиус захвата цели",
+    Min = 50,
+    Max = 500,
+    Default = 200,
+    Color = Color3.fromRGB(255, 100, 100),
+    Increment = 10,
+    ValueName = "пикселей",
+    Callback = function(Value)
+        fovRadius = Value
+    end
+})
+
+-- Плавность наведения
+MainTab:AddSlider({
+    Name = "Плавность наведения",
+    Min = 0.1,
+    Max = 1,
+    Default = 0.5,
+    Color = Color3.fromRGB(100, 100, 255),
+    Increment = 0.1,
+    ValueName = "",
+    Callback = function(Value)
+        aimSmoothness = Value
+    end
+})
+
+-- FOV Круг (визуальный)
+local fovCircle = Drawing.new("Circle")
+fovCircle.Color = Color3.fromRGB(255, 100, 100)
+fovCircle.Thickness = 1
+fovCircle.Transparency = 0.5
+fovCircle.Visible = false
+
+MainTab:AddToggle({
+    Name = "Показать FOV круг",
+    Default = false,
+    Color = Color3.fromRGB(100, 255, 100),
+    Callback = function(Value)
+        fovCircle.Visible = Value
+        if Value then
+            task.spawn(function()
+                while fovCircle.Visible do
+                    fovCircle.Radius = fovRadius
+                    fovCircle.Position = Vector2.new(mouse.X, mouse.Y + 36)
+                    task.wait()
+                end
+            end)
+        end
+    end
+})
+
+-- Информация
+MainTab:AddLabel("🎮 Управление:")
+MainTab:AddLabel("ПКМ (зажать) - Наведение на цель")
+MainTab:AddLabel("F - Ручной выстрел")
+MainTab:AddLabel("Auto Shoot - Авто стрельба")
+MainTab:AddLabel("Возьмите BasicGun чтобы работало")
+
+-- Авто-подбор оружия
+MainTab:AddButton({
+    Name = "🔫 Авто-взять BasicGun",
+    Callback = function()
+        local char = localPlayer.Character
+        if not char then
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Персонаж не загружен!",
+                Time = 2,
+                Color = Color3.fromRGB(255, 0, 0)
+            })
+            return
+        end
+        
+        -- Ищем BasicGun в Workspace
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Tool") and obj.Name == "BasicGun" and not obj.Parent:IsA("Player") then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    obj.Handle.CFrame = root.CFrame + Vector3.new(0, 3, 0)
+                    task.wait(0.1)
+                    obj.Parent = localPlayer.Backpack
+                end
+                OrionLib:MakeNotification({
+                    Name = "Успех",
+                    Content = "BasicGun в рюкзаке!",
+                    Time = 2,
+                    Color = Color3.fromRGB(0, 255, 0)
+                })
+                return
+            end
+        end
+        
+        OrionLib:MakeNotification({
+            Name = "Ошибка",
+            Content = "BasicGun не найден на карте",
+            Time = 2,
+            Color = Color3.fromRGB(255, 0, 0)
+        })
+    end
+})
 
 OrionLib:Init()
 
 OrionLib:MakeNotification({
-    Name = "Scanner Lite готов",
-    Content = "Жми Сканировать, все в файле!",
-    Time = 3,
+    Name = "Aim Bot 1v1 готов!",
+    Content = "Жми ПКМ для наведения\nF для выстрела",
+    Time = 5,
     Color = Color3.fromRGB(0, 255, 0)
 })
+
+-- Авто-уничтожение FOV круга при выходе
+localPlayer.OnTeleport:Connect(function(state)
+    fovCircle:Remove()
+end)
