@@ -1,0 +1,240 @@
+-- Delta GUI для Piggy Build Mode (С кнопками и статистикой)
+local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+-- Функция отправки сообщений в чат
+local function sendChatMessage(message)
+    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+        local textChannel = TextChatService.TextChannels:FindFirstChild("RBXGeneral")
+        if textChannel then
+            textChannel:SendAsync(message)
+        end
+    else
+        local defaultChatSystemChatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+        if defaultChatSystemChatEvents then
+            local sayMessageRequest = defaultChatSystemChatEvents:FindFirstChild("SayMessageRequest")
+            if sayMessageRequest then
+                sayMessageRequest:FireServer(message, "All")
+            end
+        end
+    end
+end
+
+-- Удаляем старый GUI, если он уже был запущен
+local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+if playerGui:FindFirstChild("PiggyAdminPanel") then
+    playerGui.PiggyAdminPanel:Destroy()
+end
+
+-- Создаем ScreenGui
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "PiggyAdminPanel"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = playerGui
+
+-- === ГЛАВНОЕ ОКНО ===
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+MainFrame.Position = UDim2.new(0.15, 0, 0.15, 0)
+MainFrame.Size = UDim2.new(0, 220, 0, 420) -- Увеличили высоту для блока статистики
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+local FrameCorner = Instance.new("UICorner")
+FrameCorner.CornerRadius = UDim.new(0, 10)
+FrameCorner.Parent = MainFrame
+
+-- Заголовок
+local Title = Instance.new("TextLabel")
+Title.Name = "Title"
+Title.Parent = MainFrame
+Title.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+Title.Size = UDim2.new(1, 0, 0, 38)
+Title.Font = Enum.Font.SourceSansBold
+Title.Text = "  Админ Панель"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 10)
+TitleCorner.Parent = Title
+
+-- Кнопка свёртывания (минус)
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Name = "MinimizeBtn"
+MinimizeBtn.Parent = Title
+MinimizeBtn.BackgroundTransparency = 1
+MinimizeBtn.Position = UDim2.new(1, -35, 0, 0)
+MinimizeBtn.Size = UDim2.new(0, 35, 1, 0)
+MinimizeBtn.Font = Enum.Font.SourceSansBold
+MinimizeBtn.Text = "—"
+MinimizeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+MinimizeBtn.TextSize = 20
+
+-- === КРУГЛАЯ ПЛАВАЮЩАЯ КНОПКА (Для разворачивания) ===
+local ToggleButton = Instance.new("ImageButton")
+local ToggleCorner = Instance.new("UICorner")
+
+ToggleButton.Name = "ToggleButton"
+ToggleButton.Parent = ScreenGui
+ToggleButton.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+ToggleButton.Position = UDim2.new(0.05, 0, 0.2, 0)
+ToggleButton.Size = UDim2.new(0, 50, 0, 50)
+ToggleButton.Image = "rbxassetid://129477975431198"
+ToggleButton.Active = true
+ToggleButton.Draggable = true
+ToggleButton.Visible = false
+
+ToggleCorner.CornerRadius = UDim.new(1, 0)
+ToggleCorner.Parent = ToggleButton
+
+-- === БЛОК СТАТИСТИКИ ===
+local StatsFrame = Instance.new("Frame")
+StatsFrame.Name = "StatsFrame"
+StatsFrame.Parent = MainFrame
+StatsFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+StatsFrame.Position = UDim2.new(0.05, 0, 0, 45)
+StatsFrame.Size = UDim2.new(0.9, 0, 0, 105)
+
+local StatsCorner = Instance.new("UICorner")
+StatsCorner.CornerRadius = UDim.new(0, 8)
+StatsCorner.Parent = StatsFrame
+
+local StatsList = Instance.new("UIListLayout")
+StatsList.Parent = StatsFrame
+StatsList.Padding = UDim.new(0, 3)
+StatsList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+StatsList.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Текстовые метки статистики
+local function createStatLabel(name, defaultText, color)
+    local lbl = Instance.new("TextLabel")
+    lbl.Name = name
+    lbl.Parent = StatsFrame
+    lbl.Size = UDim2.new(0.95, 0, 0, 22)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.SourceSansSemibold
+    lbl.Text = defaultText
+    lbl.TextColor3 = color or Color3.fromRGB(220, 220, 220)
+    lbl.TextSize = 14
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    return lbl
+end
+
+local LikesLabel = createStatLabel("LikesLabel", "👍 Лайки: 0", Color3.fromRGB(255, 215, 0))
+local TotalPlayersLabel = createStatLabel("TotalLabel", "👥 Всего игроков: 0", Color3.fromRGB(255, 255, 255))
+local SurvivorsLabel = createStatLabel("SurvivorsLabel", "🛡️ Выживших: 0", Color3.fromRGB(100, 255, 100))
+local InfectedLabel = createStatLabel("InfectedLabel", "☣️ Зараженных: 0", Color3.fromRGB(255, 80, 80))
+
+-- === КУСОК ОБНОВЛЕНИЯ СТАТИСТИКИ ===
+local function updateStats()
+    -- 1. Лайки из ReplicatedStorage.Rating
+    local ratingObj = ReplicatedStorage:FindFirstChild("Rating")
+    if ratingObj then
+        LikesLabel.Text = "👍 Лайки: " .. tostring(ratingObj.Value)
+    else
+        LikesLabel.Text = "👍 Лайки: N/A"
+    end
+
+    -- 2. Всего игроков
+    local allPlayers = Players:GetPlayers()
+    TotalPlayersLabel.Text = "👥 Всего игроков: " .. tostring(#allPlayers)
+
+    -- 3. Подсчет выживших и зараженных через Workspace
+    local infectedCount = 0
+    local survivorCount = 0
+
+    for _, player in ipairs(allPlayers) do
+        local character = player.Character or Workspace:FindFirstChild(player.Name)
+        if character then
+            local enemyVal = character:FindFirstChild("Enemy")
+            if enemyVal and enemyVal:IsA("BoolValue") then
+                if enemyVal.Value == true then
+                    infectedCount = infectedCount + 1
+                else
+                    survivorCount = survivorCount + 1
+                end
+            else
+                -- Если значение Enemy еще не создалось/не определилось
+                survivorCount = survivorCount + 1
+            end
+        end
+    end
+
+    SurvivorsLabel.Text = "🛡️ Выживших: " .. tostring(survivorCount)
+    InfectedLabel.Text = "☣️ Зараженных: " .. tostring(infectedCount)
+end
+
+-- Авто-обновление статистики раз в секунду и при изменении Rating
+task.spawn(function()
+    local ratingObj = ReplicatedStorage:WaitForChild("Rating", 5)
+    if ratingObj then
+        ratingObj.Changed:Connect(updateStats)
+    end
+    
+    while true do
+        updateStats()
+        task.wait(1)
+    end
+end)
+
+-- === КОНТЕЙНЕР ДЛЯ КНОПАК КОМАНД ===
+local ButtonsContainer = Instance.new("Frame")
+ButtonsContainer.Name = "ButtonsContainer"
+ButtonsContainer.Parent = MainFrame
+ButtonsContainer.BackgroundTransparency = 1
+ButtonsContainer.Position = UDim2.new(0, 0, 0, 160)
+ButtonsContainer.Size = UDim2.new(1, 0, 1, -160)
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = ButtonsContainer
+UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 6)
+
+-- Функция создания кнопок команд
+local function createButton(text, command, order)
+    local button = Instance.new("TextButton")
+    button.Parent = ButtonsContainer
+    button.Size = UDim2.new(0.9, 0, 0, 32)
+    button.BackgroundColor3 = Color3.fromRGB(55, 60, 75)
+    button.Font = Enum.Font.SourceSansSemibold
+    button.Text = text
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.TextSize = 14
+    button.LayoutOrder = order
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = button
+
+    button.MouseButton1Click:Connect(function()
+        sendChatMessage(command)
+    end)
+end
+
+-- Создаем кнопки команд
+createButton("1. Стать нормальным", "/q0", 1)
+createButton("2. Стать мебелью", "/q1", 2)
+createButton("3. Вылечиться", "/q2", 3)
+createButton("4. Фулл энергия", "/q3", 4)
+createButton("5. Фейерверки", "/q4", 5)
+createButton("6. Стать зараженным", "/q5", 6)
+
+-- Логика сворачивания и разворачивания
+local isOpen = true
+
+local function toggleGui()
+    isOpen = not isOpen
+    MainFrame.Visible = isOpen
+    ToggleButton.Visible = not isOpen
+end
+
+MinimizeBtn.MouseButton1Click:Connect(toggleGui)
+ToggleButton.MouseButton1Click:Connect(toggleGui)
+
